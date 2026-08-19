@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Resources\logo\logo.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="EPPlus" Version="8.6.1" />
+    <PackageReference Include="FluentFTP" Version="54.2.0" />
+    <PackageReference Include="Lemutec.RemoteViewing.WPF" Version="1.2.1" />
+    <PackageReference Include="MaterialDesignColors" Version="5.3.2" />
+    <PackageReference Include="MaterialDesignThemes" Version="5.3.2" />
+    <PackageReference Include="MySqlConnector" Version="2.6.1" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="OpenGauss_NET" Version="6.0.30" />
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="System.IO.Ports" Version="10.0.9" />
+    <PackageReference Include="System.Data.OleDb" Version="10.0.0" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\logo\logo.png" />
+  </ItemGroup>
+
+  <!-- 发布时复制 plugins 和 openGaussProxy 目录 -->
+  <ItemGroup>
+    <Content Include="plugins\**\*" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="openGaussProxy\**\*" CopyToPublishDirectory="PreserveNewest" />
+    <!-- x11vnc 静态编译二进制（x86_64/aarch64），部署 VNC Server 时读取；说明文档不随发布复制 -->
+    <Content Include="Resources\x11vnc\**" Exclude="Resources\x11vnc\*.md" CopyToPublishDirectory="PreserveNewest" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

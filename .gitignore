@@ -1,0 +1,31 @@
+# ===== 构建产物 =====
+[Bb]in/
+[Oo]bj/
+publish/
+
+# ===== 运行时数据 =====
+logs/
+data/
+
+# ===== IDE =====
+.vs/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== NuGet =====
+*.nupkg
+project.lock.json
+
+# ===== 大型第三方安装包（不入库，获取方式见 README.md）=====
+plugins/accessdatabaseengine_X64.exe
+
+# ===== IDE 工具生成 =====
+.qoder/
