@@ -27,6 +27,10 @@ public class DeviceApiTestView : UserControl
     private TextBox _tokenBox = new();
     private TextBox _logBox = new();
     private DataGrid _deviceGrid = new();
+    private DataGrid _mqttGrid = new();
+    private DockPanel _gridPanel = new();   // 设备列表展示面板
+    private DockPanel _mqttPanel = new();   // MQTT 主题展示面板（与设备面板共用展示区，二选一显示）
+    private bool _mqttActive;               // 当前展示的是否为 MQTT 主题列表
     private TextBlock _statusText = new();
     private Button _loginBtn = new();
     private Button _getDeviceBtn = new();
@@ -43,6 +47,9 @@ public class DeviceApiTestView : UserControl
     private const double GridChromeHeight = 26;     // “设备列表”标签 20 + 边框 2 + 面板下边距 4
     /// <summary>设备列表区固定高度 = 表头 + 4 条数据 + 外框修饰</summary>
     private static double ResultFixedHeight => GridHeaderHeight + VisibleDataRows * GridRowHeight + GridChromeHeight;
+    private const int MqttVisibleRows = 3;            // MQTT 主题区默认可见条数（3 条，节省纵向空间）
+    /// <summary>MQTT主题区固定高度 = 表头 + 3 条数据 + 外框修饰</summary>
+    private static double MqttFixedHeight => GridHeaderHeight + MqttVisibleRows * GridRowHeight + GridChromeHeight;
     private const double LogFixedHeight = 150;      // 日志区固定高度（含“响应日志”标签）
 
     public DeviceApiTestView()
@@ -71,7 +78,9 @@ public class DeviceApiTestView : UserControl
         var win = Window.GetWindow(this);
         if (win == null) return;
         var extra = win.ActualHeight - DefaultWindowHeight;
-        _resultRow.Height = new GridLength(extra > 0 ? ResultFixedHeight + extra : ResultFixedHeight);
+        // 列表区基础高度随当前展示的面板切换（设备列表 4 条 / MQTT 主题 3 条）
+        var baseHeight = _mqttActive ? MqttFixedHeight : ResultFixedHeight;
+        _resultRow.Height = new GridLength(extra > 0 ? baseHeight + extra : baseHeight);
     }
 
     private TextBox MakeBox(string hint, string defaultText = "", int minWidth = 150)
@@ -196,8 +205,12 @@ public class DeviceApiTestView : UserControl
         btnRow.Children.Add(_loginBtn);
         _getDeviceBtn = MakeButton("获取设备ID", GetDeviceIds, false, PackIconKind.CellphoneInformation);
         btnRow.Children.Add(_getDeviceBtn);
-        btnRow.Children.Add(MakeButton("清空结果", () => { _deviceGrid.ItemsSource = null; _logBox.Clear(); _tokenBox.Text = ""; _token = null; SetStatus("", true); }, false, PackIconKind.Eraser));
-        btnRow.Children.Add(MakeButton("导出", ExportToExcel, false, PackIconKind.FileExcel));
+        // MQTT 主题：与设备列表共用展示区，点击后切换显示 MQTT 主题表格
+        btnRow.Children.Add(MakeButton("MQTT主题", GetMqttTopics, false, PackIconKind.Antenna));
+        // 清空结果：同时清空设备列表与 MQTT 主题列表，并切回设备列表视图
+        btnRow.Children.Add(MakeButton("清空结果", () => { _deviceGrid.ItemsSource = null; _mqttGrid.ItemsSource = null; ShowDevicePanel(); _logBox.Clear(); _tokenBox.Text = ""; _token = null; SetStatus("", true); }, false, PackIconKind.Eraser));
+        // 导出：导出当前展示的列表（设备列表 或 MQTT主题）
+        btnRow.Children.Add(MakeButton("导出", ExportCurrent, false, PackIconKind.FileExcel));
         _statusText.VerticalAlignment = VerticalAlignment.Center;
         _statusText.Margin = new Thickness(16, 0, 0, 0);
         _statusText.FontSize = 13;
@@ -241,9 +254,47 @@ public class DeviceApiTestView : UserControl
             Child = _deviceGrid
         };
 
-        var gridPanel = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
-        gridPanel.Children.Add(gridLabel);
-        gridPanel.Children.Add(gridBorder);
+        _gridPanel = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+        _gridPanel.Children.Add(gridLabel);
+        _gridPanel.Children.Add(gridBorder);
+
+        // ===== MQTT 主题列表（与设备列表共用展示区，点击「MQTT主题」按钮时切换显示，独立 3 列）=====
+        var mqttLabel = new TextBlock
+        {
+            Text = "MQTT主题",
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        DockPanel.SetDock(mqttLabel, Dock.Top);
+
+        _mqttGrid.AutoGenerateColumns = false;
+        _mqttGrid.IsReadOnly = true;
+        _mqttGrid.CanUserAddRows = false;
+        _mqttGrid.CanUserDeleteRows = false;
+        _mqttGrid.SelectionMode = DataGridSelectionMode.Extended;
+        _mqttGrid.ClipboardCopyMode = DataGridClipboardCopyMode.IncludeHeader;
+        _mqttGrid.FontFamily = new FontFamily("Microsoft YaHei");
+        _mqttGrid.FontSize = 13;
+        _mqttGrid.RowHeight = GridRowHeight;
+        _mqttGrid.ColumnHeaderHeight = GridHeaderHeight;
+        _mqttGrid.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(245, 245, 245));
+
+        _mqttGrid.Columns.Add(new DataGridTextColumn { Header = "网关名称", Binding = new System.Windows.Data.Binding("GateName"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), CanUserResize = false });
+        _mqttGrid.Columns.Add(new DataGridTextColumn { Header = "订阅主题", Binding = new System.Windows.Data.Binding("MqttDownTopic"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), CanUserResize = false });
+        _mqttGrid.Columns.Add(new DataGridTextColumn { Header = "发布主题", Binding = new System.Windows.Data.Binding("MqttUpTopic"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), CanUserResize = false });
+
+        var mqttBorder = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(200, 200, 200)),
+            BorderThickness = new Thickness(1),
+            Child = _mqttGrid
+        };
+
+        _mqttPanel = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+        _mqttPanel.Children.Add(mqttLabel);
+        _mqttPanel.Children.Add(mqttBorder);
+        // 默认展示设备列表，MQTT 主题面板隐藏；点击「获取设备ID」/「MQTT主题」按钮时切换
+        _mqttPanel.Visibility = Visibility.Collapsed;
 
         // 日志输出区（高度由外层 Grid 等比分配，与表格区等高）
         var logPanel = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
@@ -268,13 +319,15 @@ public class DeviceApiTestView : UserControl
         if (logStyle != null) _logBox.Style = logStyle;
         logPanel.Children.Add(_logBox);
 
-        // 两行 Grid：默认窗口下设备列表固定显示 4 条数据、日志区固定高度；窗口放大后设备列表按剩余空间自适应（日志区始终固定）
+        // 两行 Grid：列表展示区（设备列表 / MQTT主题 二选一显示，默认固定高度、窗口放大后自适应） + 日志区（固定高度）
         var contentGrid = new Grid();
         _resultRow = new RowDefinition { Height = new GridLength(ResultFixedHeight) }; // 默认容纳 4 条数据
         contentGrid.RowDefinitions.Add(_resultRow);
         contentGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(LogFixedHeight) }); // 日志区固定高度
-        Grid.SetRow(gridPanel, 0);
-        contentGrid.Children.Add(gridPanel);
+        Grid.SetRow(_gridPanel, 0);
+        contentGrid.Children.Add(_gridPanel);
+        Grid.SetRow(_mqttPanel, 0);
+        contentGrid.Children.Add(_mqttPanel);
         Grid.SetRow(logPanel, 1);
         contentGrid.Children.Add(logPanel);
         root.Children.Add(contentGrid);
@@ -372,6 +425,7 @@ public class DeviceApiTestView : UserControl
         if (string.IsNullOrEmpty(baseUrl)) { SetStatus("请输入 IP 和端口", false); return; }
         if (string.IsNullOrEmpty(token)) { SetStatus("请先登录获取 Token", false); return; }
 
+        ShowDevicePanel();
         SetStatus("正在获取设备列表...", true);
         try
         {
@@ -432,6 +486,112 @@ public class DeviceApiTestView : UserControl
             AppendLog($"[ERROR] {ex.Message}");
             SetStatus($"请求异常: {ex.Message}", false);
         }
+    }
+
+    // ========== 获取 MQTT 主题（独立列表）==========
+
+    private async void GetMqttTopics()
+    {
+        var baseUrl = GetBaseUrl();
+        var token = _token;
+        if (string.IsNullOrEmpty(baseUrl)) { SetStatus("请输入 IP 和端口", false); return; }
+        if (string.IsNullOrEmpty(token)) { SetStatus("请先登录获取 Token", false); return; }
+
+        ShowMqttPanel();
+        SetStatus("正在获取 MQTT 主题...", true);
+        try
+        {
+            var url = $"{baseUrl}/device/deviceinfo/list?deviceName=&comAddress=&pageSize=100&page=1";
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            // 多种方式传递 Token，兼容不同服务端配置
+            req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+            req.Headers.TryAddWithoutValidation("token", token);
+
+            var resp = await _http.SendAsync(req);
+            var json = await resp.Content.ReadAsStringAsync();
+            AppendLog($"[GET /device/deviceinfo/list] HTTP {(int)resp.StatusCode}");
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                AppendLog(json);
+                SetStatus($"请求失败: HTTP {(int)resp.StatusCode}", false);
+                return;
+            }
+
+            var obj = JObject.Parse(json);
+            var data = obj["data"];
+            // 兼容多种返回格式：data直接是数组 / data.list / data.records / data.rows
+            JToken? items = null;
+            if (data is JArray)
+                items = data;
+            else if (data is JObject dObj)
+                items = dObj["list"] ?? dObj["records"] ?? dObj["rows"] ?? data;
+
+            if (items is JArray arr)
+            {
+                var topics = new List<MqttTopicItem>();
+                for (int i = 0; i < arr.Count; i++)
+                {
+                    var dev = arr[i];
+                    topics.Add(new MqttTopicItem
+                    {
+                        GateName = GetField(dev, "gateName"),
+                        MqttDownTopic = GetField(dev, "mqttDownTopic", "mqttDown", "downTopic"),
+                        MqttUpTopic = GetField(dev, "mqttUpTopic", "mqttUp", "upTopic")
+                    });
+                }
+                _mqttGrid.ItemsSource = topics;
+                AutoSizeMqttColumns();
+                AppendLog($"获取成功，共 {topics.Count} 台设备的 MQTT 主题");
+                SetStatus($"获取成功，共 {topics.Count} 台设备", true);
+            }
+            else
+            {
+                AppendLog(json);
+                SetStatus("返回格式异常，请查看日志", false);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[ERROR] {ex.Message}");
+            SetStatus($"请求异常: {ex.Message}", false);
+        }
+    }
+
+    /// <summary>按候选 key 顺序取值，均不存在或为空时返回"无"（防御式解析，兼容后端字段名与文档不一致）</summary>
+    private static string GetField(JToken dev, params string[] keys)
+    {
+        foreach (var k in keys)
+        {
+            var v = dev[k]?.ToString();
+            if (!string.IsNullOrWhiteSpace(v)) return v;
+        }
+        return "无";
+    }
+
+    // ========== 展示区切换（设备列表 / MQTT主题 二选一）==========
+
+    private void ShowDevicePanel()
+    {
+        _mqttActive = false;
+        _gridPanel.Visibility = Visibility.Visible;
+        _mqttPanel.Visibility = Visibility.Collapsed;
+        UpdateResultRowHeight();
+    }
+
+    private void ShowMqttPanel()
+    {
+        _mqttActive = true;
+        _gridPanel.Visibility = Visibility.Collapsed;
+        _mqttPanel.Visibility = Visibility.Visible;
+        UpdateResultRowHeight();
+    }
+
+    /// <summary>导出当前展示的列表：MQTT 主题视图导出 MQTT 列表，否则导出设备列表</summary>
+    private void ExportCurrent()
+    {
+        if (_mqttActive) ExportMqttToExcel();
+        else ExportToExcel();
     }
 
     // ========== 辅助方法 ==========
@@ -510,6 +670,40 @@ public class DeviceApiTestView : UserControl
                 _deviceGrid.Columns[2].ActualWidth + 26, DataGridLengthUnitType.Pixel);
     }
 
+    private void AutoSizeMqttColumns()
+    {
+        var items = _mqttGrid.ItemsSource as IList<MqttTopicItem>;
+        if (items == null || items.Count == 0) return;
+        var dpi = VisualTreeHelper.GetDpi(_mqttGrid).PixelsPerDip;
+        var typeface = new Typeface("Microsoft YaHei");
+
+        double MeasureText(string text)
+        {
+            var ft = new FormattedText(text ?? "", System.Globalization.CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight, typeface, 13, Brushes.Black, dpi);
+            return ft.Width;
+        }
+
+        var dataSelectors = new Func<MqttTopicItem, string>[]
+        {
+            r => r.GateName,
+            r => r.MqttDownTopic,
+            r => r.MqttUpTopic
+        };
+
+        for (int c = 0; c < _mqttGrid.Columns.Count && c < dataSelectors.Length; c++)
+        {
+            double maxW = MeasureText(_mqttGrid.Columns[c].Header?.ToString() ?? "") + 24;
+            var sel = dataSelectors[c];
+            foreach (var item in items)
+            {
+                var w = MeasureText(sel(item)) + 24;
+                if (w > maxW) maxW = w;
+            }
+            _mqttGrid.Columns[c].Width = new DataGridLength(maxW, DataGridLengthUnitType.Pixel);
+        }
+    }
+
     private void AppendLog(string text)
     {
         _logBox.AppendText($"[{DateTime.Now:HH:mm:ss}] {text}\n");
@@ -576,6 +770,62 @@ public class DeviceApiTestView : UserControl
             AppendLog($"[导出失败] {ex.Message}");
         }
     }
+
+    // ========== 导出 MQTT 主题（独立导出）==========
+
+    private void ExportMqttToExcel()
+    {
+        var items = _mqttGrid.ItemsSource as IList<MqttTopicItem>;
+        if (items == null || items.Count == 0)
+        {
+            SetStatus("无 MQTT 主题数据可导出", false);
+            return;
+        }
+
+        ExcelPackage.License.SetNonCommercialPersonal("ToolHelper");
+        var dlg = new SaveFileDialog
+        {
+            Filter = "Excel 文件 (*.xlsx)|*.xlsx",
+            FileName = $"MQTT主题_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            DefaultExt = ".xlsx"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            using var package = new ExcelPackage();
+            var sheet = package.Workbook.Worksheets.Add("MQTT主题");
+            // 表头
+            sheet.Cells[1, 1].Value = "网关名称";
+            sheet.Cells[1, 2].Value = "订阅主题";
+            sheet.Cells[1, 3].Value = "发布主题";
+            // 表头样式
+            using (var headerRange = sheet.Cells[1, 1, 1, 3])
+            {
+                headerRange.Style.Font.Bold = true;
+                headerRange.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                headerRange.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.FromArgb(68, 114, 196));
+                headerRange.Style.Font.Color.SetColor(System.Drawing.Color.White);
+            }
+            // 数据行
+            for (int i = 0; i < items.Count; i++)
+            {
+                sheet.Cells[i + 2, 1].Value = items[i].GateName;
+                sheet.Cells[i + 2, 2].Value = items[i].MqttDownTopic;
+                sheet.Cells[i + 2, 3].Value = items[i].MqttUpTopic;
+            }
+            // 自动列宽
+            sheet.Cells[sheet.Dimension.Address].AutoFitColumns();
+            package.SaveAs(new System.IO.FileInfo(dlg.FileName));
+            SetStatus($"导出成功: {dlg.FileName}", true);
+            AppendLog($"导出成功: {dlg.FileName}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"导出失败: {ex.Message}", false);
+            AppendLog($"[导出失败] {ex.Message}");
+        }
+    }
 }
 
 public class DeviceItem
@@ -583,4 +833,11 @@ public class DeviceItem
     public string Name { get; set; } = "";
     public string Address { get; set; } = "";
     public string Id { get; set; } = "";
+}
+
+public class MqttTopicItem
+{
+    public string GateName { get; set; } = "";       // 名称（所属网关名称）
+    public string MqttDownTopic { get; set; } = "";  // 订阅主题
+    public string MqttUpTopic { get; set; } = "";    // 发布主题
 }
