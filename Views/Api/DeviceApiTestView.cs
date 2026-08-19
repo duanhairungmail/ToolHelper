@@ -50,7 +50,7 @@ public class DeviceApiTestView : UserControl
     private const int MqttVisibleRows = 3;            // MQTT 主题区默认可见条数（3 条，节省纵向空间）
     /// <summary>MQTT主题区固定高度 = 表头 + 3 条数据 + 外框修饰</summary>
     private static double MqttFixedHeight => GridHeaderHeight + MqttVisibleRows * GridRowHeight + GridChromeHeight;
-    private const double LogFixedHeight = 150;      // 日志区固定高度（含“响应日志”标签）
+    private const double LogFixedHeight = 200;      // 日志区固定高度（含“响应日志”标签）
 
     public DeviceApiTestView()
     {

@@ -42,7 +42,7 @@ public class ApiValidationView : UserControl
     private const double GridChromeHeight = 44;     // “验证结果”标签 20 + 边框 2 + 水平滚动条 18 + 面板下边距 4
     /// <summary>验证结果区固定高度 = 表头 + 4 条数据 + 外框修饰</summary>
     private static double ResultFixedHeight => GridHeaderHeight + VisibleDataRows * GridRowHeight + GridChromeHeight;
-    private const double LogFixedHeight = 130;      // 日志区固定高度
+    private const double LogFixedHeight = 200;      // 日志区固定高度
 
     // 按钮引用（用于状态管理）
     private Button _loginBtn = new();
