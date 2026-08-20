@@ -225,7 +225,8 @@ public class ApiValidationView : UserControl
         btnRow.Children.Add(_loginBtn);
         _validateBtn = MakeButton("开始验证", ValidateAllApis, false, PackIconKind.CheckAll);
         btnRow.Children.Add(_validateBtn);
-        _clearBtn = MakeButton("清空结果", () => { _resultGrid.ItemsSource = null; _logBox.Clear(); _summaryText.Text = ""; _token = null; _tokenBox.Text = ""; SetStatus("", true); UpdateButtonStates(); }, false, PackIconKind.Eraser);
+        // 清空结果：仅清空日志区，保留验证结果表格、统计摘要与 Token（清掉 Token 会导致必须重新登录）
+        _clearBtn = MakeButton("清空结果", () => { _logBox.Clear(); SetStatus("日志已清空", true); }, false, PackIconKind.Eraser);
         btnRow.Children.Add(_clearBtn);
         _encryptBtn = MakeButton("查看加密值", ShowEncryptedValues, false, PackIconKind.KeyVariant);
         btnRow.Children.Add(_encryptBtn);
