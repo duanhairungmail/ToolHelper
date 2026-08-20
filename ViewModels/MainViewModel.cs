@@ -94,6 +94,8 @@ public partial class MainViewModel : ObservableObject
                 og.SafeDisconnect();
             else if (view is Views.Serial.SerialDebugView serial)
                 serial.SafeDisconnect();
+            else if (view is Views.Serial.EarlyWarningModbusView modbus)
+                modbus.SafeDisconnect();
             else if (view is Views.Security.KylinOsScanView kylin)
                 kylin.SafeDisconnect();
             else if (view is Views.Security.KylinOsOptimizeView kylinOpt)
@@ -191,6 +193,8 @@ public partial class MainViewModel : ObservableObject
         var serialCat = new ToolCategory("串口调试工具", "Serial");
         serialCat.Tools.Add(new ToolItem("基本串口调试", "串口通信调试，支持COM口配置、波特率设置、文本/十六进制收发、自动发送",
             () => new Views.Serial.SerialDebugView()));
+        serialCat.Tools.Add(new ToolItem("极早期Modbus调试", "申弘/南瑞怡和双协议 Modbus RTU，扫描下辖设备、一键读取全量数据并解析",
+            () => new Views.Serial.EarlyWarningModbusView()));
         Categories.Add(serialCat);
 
         // ===== 日期工具 =====
