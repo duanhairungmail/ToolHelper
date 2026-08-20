@@ -207,8 +207,8 @@ public class DeviceApiTestView : UserControl
         btnRow.Children.Add(_getDeviceBtn);
         // MQTT 主题：与设备列表共用展示区，点击后切换显示 MQTT 主题表格
         btnRow.Children.Add(MakeButton("MQTT主题", GetMqttTopics, false, PackIconKind.Antenna));
-        // 清空结果：同时清空设备列表与 MQTT 主题列表，并切回设备列表视图
-        btnRow.Children.Add(MakeButton("清空结果", () => { _deviceGrid.ItemsSource = null; _mqttGrid.ItemsSource = null; ShowDevicePanel(); _logBox.Clear(); _tokenBox.Text = ""; _token = null; SetStatus("", true); }, false, PackIconKind.Eraser));
+        // 清空结果：仅清空日志区，保留设备列表、MQTT 主题列表、当前视图与 Token（清掉 Token 会导致必须重新登录）
+        btnRow.Children.Add(MakeButton("清空结果", () => { _logBox.Clear(); SetStatus("日志已清空", true); }, false, PackIconKind.Eraser));
         // 导出：导出当前展示的列表（设备列表 或 MQTT主题）
         btnRow.Children.Add(MakeButton("导出", ExportCurrent, false, PackIconKind.FileExcel));
         _statusText.VerticalAlignment = VerticalAlignment.Center;
