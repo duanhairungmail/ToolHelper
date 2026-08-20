@@ -126,6 +126,9 @@ public class DeviceMacView : UserControl
         if (_built) { Loaded -= OnLoaded; return; }
         _built = true;
         BuildUI();
+        // 视图高度钉在宿主 ScrollViewer 视口上（踩坑记录 #15 同款修复）：
+        // 宿主向视图传递无限高度，内部 ScrollViewer 不生效导致表格底部行被截断且无滚动条
+        ViewportFitHelper.FitToViewport(this, 560);
         DetectDriverAndLoadData();
         Loaded -= OnLoaded;
     }
@@ -294,15 +297,16 @@ public class DeviceMacView : UserControl
         _grid.Resources.Add(SystemColors.HighlightBrushKey, new SolidColorBrush(Color.FromRgb(224, 224, 224)));
         _grid.Resources.Add(SystemColors.InactiveSelectionHighlightBrushKey, new SolidColorBrush(Color.FromRgb(224, 224, 224)));
     
-        _grid.Columns.Add(new DataGridTextColumn { Header = "序号", Binding = new Binding("Id") { Mode = BindingMode.OneWay }, Width = 70, IsReadOnly = true });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "站名", Binding = new Binding("StationName") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 155 });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "IP地址", Binding = new Binding("IPAddress") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 155 });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "设备名", Binding = new Binding("DeviceName") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 155 });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "设备型号", Binding = new Binding("DeviceModel") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 155 });
-        _grid.Columns.Add(new DataGridTextColumn { Header = "设备序列号", Binding = new Binding("SerialNumber") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 155 });
-    
+        _grid.Columns.Add(new DataGridTextColumn { Header = "序号", Binding = new Binding("Id") { Mode = BindingMode.OneWay }, Width = 45, IsReadOnly = true });
+        // 站名列设为星号列：吸收窗口宽度变化，保证「操作」列始终完整可见（其余列为固定宽）
+        _grid.Columns.Add(new DataGridTextColumn { Header = "站名", Binding = new Binding("StationName") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = new DataGridLength(1, DataGridLengthUnitType.Star), MinWidth = 60 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "IP地址", Binding = new Binding("IPAddress") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 125 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "设备名", Binding = new Binding("DeviceName") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 95 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "设备型号", Binding = new Binding("DeviceModel") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 95 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "设备序列号", Binding = new Binding("SerialNumber") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 115 });
+        
         // MAC 地址列（带颜色状态）
-        var macCol = new DataGridTemplateColumn { Header = "设备MAC地址", Width = 155, CanUserSort = false };
+        var macCol = new DataGridTemplateColumn { Header = "设备MAC地址", Width = 145, CanUserSort = false };
         var macTemplate = new DataTemplate(typeof(DeviceRecord));
         var macFef = new FrameworkElementFactory(typeof(TextBlock));
         macFef.SetBinding(TextBlock.TextProperty, new Binding("MacAddress") { Mode = BindingMode.OneWay });
@@ -315,13 +319,15 @@ public class DeviceMacView : UserControl
         macCol.CellStyle = CreateMacCellStyle();
         _grid.Columns.Add(macCol);
     
-        _grid.Columns.Add(new DataGridTextColumn { Header = "安装位置", Binding = new Binding("Location") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 120 });
+        _grid.Columns.Add(new DataGridTextColumn { Header = "安装位置", Binding = new Binding("Location") { Mode = BindingMode.TwoWay, UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged }, Width = 85 });
     
-        // 行内“通信”按钮列（MaterialDesign 样式）
-        var commCol = new DataGridTemplateColumn { Header = "操作", Width = 96, CanUserSort = false };
+        // 行内"通信"按钮列：显式收紧内边距（覆盖 MaterialDesign 样式默认大内边距），
+        // 按钮实测宽 = 内边距10×2 + 图标14 + 间距2 + 文字24 ≈ 60px，列宽 104 足够完整显示
+        var commCol = new DataGridTemplateColumn { Header = "操作", Width = 104, CanUserSort = false };
         var template = new DataTemplate(typeof(DeviceRecord));
         var fef = new FrameworkElementFactory(typeof(Button));
         fef.SetValue(Button.MarginProperty, new Thickness(4, 2, 4, 2));
+        fef.SetValue(Button.PaddingProperty, new Thickness(10, 2, 10, 2));
         fef.SetValue(Button.CursorProperty, System.Windows.Input.Cursors.Hand);
         fef.SetValue(Button.FontSizeProperty, 12.0);
         fef.SetValue(FrameworkElement.StyleProperty, TryFindResource("MaterialDesignOutlinedButton") as System.Windows.Style);
