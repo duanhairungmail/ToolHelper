@@ -36,9 +36,12 @@ public class ElectermLauncherView : UserControl
         {
             _built = true;
             BuildUI();
+            // 视图高度钉在宿主视口上（踩坑记录 #15 同款方案）：宿主向视图传递无限高度，
+            // 星号行/填充区无法按比例分配；钉住高度后日志区才能随窗口大小自动伸缩
+            ViewportFitHelper.FitToViewport(this, 480);
         }
         // 视图被 MainViewModel 缓存复用（GetOrCreateView），每次切入都必须重新检测插件状态：
-        // 修复"手动删除插件目录后下载按钮仍禁用"的问题
+        // 修复"手动删除插件目录后下载按钮仍禁用"的问题（踩坑记录 #22）
         RefreshPluginState();
     }
 
@@ -93,15 +96,18 @@ public class ElectermLauncherView : UserControl
 
     private void BuildUI()
     {
-        var root = new StackPanel();
+        var root = new DockPanel();
         var titleBrush = TryFindResource("PrimaryHueMidBrush") as Brush ?? Brushes.DarkBlue;
+
+        // ── 上部固定内容（标题/描述/信息行/按钮行） ──
+        var top = new StackPanel();
 
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
         titleRow.Children.Add(new PackIcon { Kind = PackIconKind.Terminal, Width = 28, Height = 28, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
         titleRow.Children.Add(new TextBlock { Text = "  SSH 外挂", FontSize = 20, FontWeight = FontWeights.Bold, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
-        root.Children.Add(titleRow);
+        top.Children.Add(titleRow);
 
-        root.Children.Add(new TextBlock
+        top.Children.Add(new TextBlock
         {
             Text = "点击启动 electerm（终端 + SSH + SFTP + 串口 + RDP/VNC 客户端，MIT 开源）。首次使用需联网下载插件。",
             FontSize = 13, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
@@ -113,7 +119,7 @@ public class ElectermLauncherView : UserControl
         info.Children.Add(MakeInfoRow("插件状态:", _statusInfoText));
         info.Children.Add(MakeInfoRow("存放目录:", "plugins\\electerm\\"));
         info.Children.Add(MakeInfoRow("许可证:", "MIT"));
-        root.Children.Add(info);
+        top.Children.Add(info);
 
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal };
         _launchBtn = MakeButton("启动外挂", Launch, true, PackIconKind.Terminal);
@@ -125,16 +131,22 @@ public class ElectermLauncherView : UserControl
         _updateBtn = MakeButton("插件更新", CheckUpdate, false, PackIconKind.Update);
         btnRow.Children.Add(_updateBtn);
         btnRow.Children.Add(MakeButton("打开所在目录", OpenDir, false, PackIconKind.FolderOpen));
-        root.Children.Add(btnRow);
+        top.Children.Add(btnRow);
 
-        // 操作日志区（样式与「漏洞检测与系统优化」视图日志区一致）
-        root.Children.Add(new TextBlock
+        DockPanel.SetDock(top, Dock.Top);
+        root.Children.Add(top);
+
+        // ── 操作日志区（最后一个子元素填充剩余高度，随窗口自动伸缩；样式与「漏洞检测与系统优化」一致） ──
+        var logPanel = new DockPanel();
+        var logLabel = new TextBlock
         {
             Text = "操作日志",
             FontSize = 12, FontWeight = FontWeights.SemiBold,
             Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
             Margin = new Thickness(0, 12, 0, 4)
-        });
+        };
+        DockPanel.SetDock(logLabel, Dock.Top);
+        logPanel.Children.Add(logLabel);
         _logBox = new TextBox
         {
             AcceptsReturn = true,
@@ -146,9 +158,10 @@ public class ElectermLauncherView : UserControl
             Foreground = new SolidColorBrush(Color.FromRgb(171, 178, 191)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(60, 64, 72)),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Height = 200
+            MinHeight = 120
         };
-        root.Children.Add(_logBox);
+        logPanel.Children.Add(_logBox);
+        root.Children.Add(logPanel);
 
         Content = root;
         RefreshPluginState();
