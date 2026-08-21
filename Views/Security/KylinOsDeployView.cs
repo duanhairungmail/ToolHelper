@@ -130,18 +130,20 @@ public class KylinOsDeployView : SshToolBaseView
         tab4.Content = BuildTab4Content();
         _tabControl.Items.Add(tab4);
 
-        topPanel.Children.Add(_tabControl);
+        // TabControl 直接挂到根容器（顶部面板之后 → 成为填充子元素，高度随窗口缩放）
+        root.Children.Add(_tabControl);
 
         AppendTab1("点击 [连接SSH] 连接到麒麟系统，然后在对应 Tab 中执行扫描/部署/卸载/验证操作。");
     }
 
-    private StackPanel BuildTab1Content()
+    private DockPanel BuildTab1Content()
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
 
         // 信息卡片
         _desktopUserBox = MakeBox("用户名", "", 100);
-        panel.Children.Add(MakeInfoCard(new[]
+        top.Children.Add(MakeInfoCard(new[]
         {
             "📅 执行时间：每月 1 日 00:00（cron 以 root 身份触发）",
             "🔐 仅该次重启免密登录桌面，其余所有重启必须输入密码",
@@ -151,7 +153,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         // DataGrid
         _tab1Dg = BuildItemGrid(_tab1Items);
-        panel.Children.Add(_tab1Dg);
+        top.Children.Add(_tab1Dg);
 
         // 按钮行
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
@@ -168,23 +170,25 @@ public class KylinOsDeployView : SshToolBaseView
         _tab1VerifyBtn.IsEnabled = false;
         btnRow.Children.Add(_tab1VerifyBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab1Log.Clear(), false, PackIconKind.NotificationClearAll));
-        panel.Children.Add(btnRow);
+        top.Children.Add(btnRow);
 
-        // 独立日志区域
-        _tab1Log = MakeLogBox();
-        var scroll1 = new ScrollViewer { Content = _tab1Log, Height = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        panel.Children.Add(new Border { Child = scroll1, Margin = new Thickness(0, 4, 0, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4) });
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _tab1Log));
 
         return panel;
     }
 
-    private StackPanel BuildTab2Content()
+    private DockPanel BuildTab2Content()
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
 
         // 信息卡片
         _desktopUserBox2 = MakeBox("用户名", "", 100);
-        panel.Children.Add(MakeInfoCard(new[]
+        top.Children.Add(MakeInfoCard(new[]
         {
             "📅 执行时间：每月 1 日 01:00（比重启晚 1 小时）",
             "🗑️ 删除 >365 天的 /var/log 日志和 /tmp 临时文件",
@@ -194,7 +198,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         // DataGrid
         _tab2Dg = BuildItemGrid(_tab2Items);
-        panel.Children.Add(_tab2Dg);
+        top.Children.Add(_tab2Dg);
 
         // 按钮行
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
@@ -211,22 +215,24 @@ public class KylinOsDeployView : SshToolBaseView
         _tab2VerifyBtn.IsEnabled = false;
         btnRow.Children.Add(_tab2VerifyBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab2Log.Clear(), false, PackIconKind.NotificationClearAll));
-        panel.Children.Add(btnRow);
+        top.Children.Add(btnRow);
 
-        // 独立日志区域
-        _tab2Log = MakeLogBox();
-        var scroll2 = new ScrollViewer { Content = _tab2Log, Height = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        panel.Children.Add(new Border { Child = scroll2, Margin = new Thickness(0, 4, 0, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4) });
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _tab2Log));
 
         return panel;
     }
 
-    private StackPanel BuildTab3Content()
+    private DockPanel BuildTab3Content()
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
 
         // 信息卡片
-        panel.Children.Add(MakeInfoCard(new[]
+        top.Children.Add(MakeInfoCard(new[]
         {
             "🖥️ 部署 x11vnc 到麒麟系统，共享真实桌面供远程 VNC 连接",
             "🔐 使用 VNC 密码认证，监听端口可自定义",
@@ -242,11 +248,11 @@ public class KylinOsDeployView : SshToolBaseView
         configRow.Children.Add(new TextBlock { Text = "端口:", FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 6, 0) });
         _vncPortBox = MakeBox("端口", "5901", 70);
         configRow.Children.Add(_vncPortBox);
-        panel.Children.Add(configRow);
+        top.Children.Add(configRow);
 
         // DataGrid
         _tab3Dg = BuildItemGrid(_tab3Items);
-        panel.Children.Add(_tab3Dg);
+        top.Children.Add(_tab3Dg);
 
         // 按钮行
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
@@ -266,12 +272,13 @@ public class KylinOsDeployView : SshToolBaseView
         _tab3UninstallBtn.IsEnabled = false;
         btnRow.Children.Add(_tab3UninstallBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab3Log.Clear(), false, PackIconKind.NotificationClearAll));
-        panel.Children.Add(btnRow);
+        top.Children.Add(btnRow);
 
-        // 独立日志区
-        _tab3Log = MakeLogBox();
-        var scroll3 = new ScrollViewer { Content = _tab3Log, Height = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        panel.Children.Add(new Border { Child = scroll3, Margin = new Thickness(0, 4, 0, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4) });
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _tab3Log));
 
         return panel;
     }
@@ -287,12 +294,13 @@ public class KylinOsDeployView : SshToolBaseView
         _tab4Items.Add(new DeployItem { StatusIcon = "" });
     }
 
-    private StackPanel BuildTab4Content()
+    private DockPanel BuildTab4Content()
     {
-        var panel = new StackPanel { Margin = new Thickness(8) };
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
 
         // 信息卡片
-        panel.Children.Add(MakeInfoCard(new[]
+        top.Children.Add(MakeInfoCard(new[]
         {
             "🗄️ 将开放配置（pg_hba.conf + postgresql.conf）部署到 openGauss 数据目录",
             "📁 部署前自动备份原文件到 backup_conf/ 目录",
@@ -301,7 +309,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         // DataGrid
         _tab4Dg = BuildItemGrid(_tab4Items);
-        panel.Children.Add(_tab4Dg);
+        top.Children.Add(_tab4Dg);
 
         // 按钮行
         var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
@@ -316,12 +324,47 @@ public class KylinOsDeployView : SshToolBaseView
         btnRow.Children.Add(_tab4UninstallBtn);
         btnRow.Children.Add(MakeButton("重启服务", RestartOpenGauss, false, PackIconKind.Restart));
         btnRow.Children.Add(MakeButton("日志清理", () => _tab4Log.Clear(), false, PackIconKind.NotificationClearAll));
-        panel.Children.Add(btnRow);
+        top.Children.Add(btnRow);
 
-        // 独立日志区域
-        _tab4Log = MakeLogBox();
-        var scroll = new ScrollViewer { Content = _tab4Log, Height = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        panel.Children.Add(new Border { Child = scroll, Margin = new Thickness(0, 4, 0, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4) });
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _tab4Log));
+
+        return panel;
+    }
+
+    /// <summary>构建 Tab 内操作日志面板：「操作日志」标签 + 填充剩余高度的深色日志区</summary>
+    private static DockPanel BuildTabLogPanel(ref TextBox logBox)
+    {
+        var panel = new DockPanel();
+
+        var label = new TextBlock
+        {
+            Text = "操作日志",
+            FontSize = 12, FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+            Margin = new Thickness(0, 8, 0, 4)
+        };
+        DockPanel.SetDock(label, Dock.Top);
+        panel.Children.Add(label);
+
+        logBox = MakeLogBox();
+        var scroll = new ScrollViewer
+        {
+            Content = logBox,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            MinHeight = 100
+        };
+        panel.Children.Add(new Border
+        {
+            Child = scroll,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            MinHeight = 100
+        });
 
         return panel;
     }

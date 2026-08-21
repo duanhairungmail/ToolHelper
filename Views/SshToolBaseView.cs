@@ -48,6 +48,9 @@ public abstract class SshToolBaseView : UserControl
         if (_built) return;
         _built = true;
         BuildBaseUI();
+        // 视图高度钉在宿主视口上（踩坑记录 #15 方案）：宿主向视图传递无限高度，
+        // 结果区/填充区才能按窗口比例分配高度（窗口缩放时 SizeChanged 自动同步）
+        ViewportFitHelper.FitToViewport(this, 560);
     }
 
     // ================== UI 构建 ==================
@@ -120,28 +123,39 @@ public abstract class SshToolBaseView : UserControl
         connBtnRow.Children.Add(ConnStatus);
         topPanel.Children.Add(connBtnRow);
 
-        // 让子类在连接区和结果区之间插入内容
-        BuildToolContent(root, topPanel);
-
+        // 先挂载顶部面板，再让子类在连接区与结果区之间插入内容
+        // （子类此时可向 root 追加填充子元素，成为 DockPanel 的最后一个子元素自动填充剩余高度）
         DockPanel.SetDock(topPanel, Dock.Top);
         root.Children.Add(topPanel);
+        BuildToolContent(root, topPanel);
 
-        // 结果区（子类可通过 ShowSharedResultBox = false 隐藏）
+        // 结果区（子类可通过 ShowSharedResultBox = false 隐藏；带「操作日志」标签，高度随窗口比例缩放）
         if (ShowSharedResultBox)
         {
+            var resultPanel = new DockPanel { MinHeight = 160 };
+
+            var logLabel = new TextBlock
+            {
+                Text = "操作日志",
+                FontSize = 12, FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Margin = new Thickness(0, 8, 0, 4)
+            };
+            DockPanel.SetDock(logLabel, Dock.Top);
+            resultPanel.Children.Add(logLabel);
+
             var resultScroll = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Height = 320,
-                MinHeight = 200
+                MinHeight = 120
             };
             var resultBorder = new Border
             {
                 BorderBrush = new SolidColorBrush(Color.FromRgb(60, 64, 72)),
                 BorderThickness = new Thickness(1),
-                Height = 320,
-                MinHeight = 200
+                CornerRadius = new CornerRadius(4),
+                MinHeight = 120
             };
             ResultBox.AcceptsReturn = true;
             ResultBox.TextWrapping = TextWrapping.Wrap;
@@ -157,7 +171,8 @@ public abstract class SshToolBaseView : UserControl
             if (rbStyle != null) ResultBox.Style = rbStyle;
             resultScroll.Content = ResultBox;
             resultBorder.Child = resultScroll;
-            root.Children.Add(resultBorder);
+            resultPanel.Children.Add(resultBorder);
+            root.Children.Add(resultPanel);
         }
 
         Content = root;
