@@ -149,6 +149,8 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Remote.SshView()));
         remoteCat.Tools.Add(new ToolItem("SFTP 文件管理", "通过 SFTP 协议连接远程服务器，浏览目录、上传、下载、删除文件",
             () => new Views.Remote.FtpView()));
+        remoteCat.Tools.Add(new ToolItem("SSH 外挂", "点击启动 electerm（终端 + SSH + SFTP 客户端，首次使用需联网下载，MIT 开源）",
+            () => new Views.Remote.ElectermLauncherView()));
         Categories.Add(remoteCat);
 
         // ===== 数据库连接工具 =====

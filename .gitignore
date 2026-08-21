@@ -27,5 +27,9 @@ project.lock.json
 # ===== 大型第三方安装包（不入库，获取方式见 README.md）=====
 plugins/accessdatabaseengine_X64.exe
 
+# ===== 按需下载的外挂插件（运行时从 GitHub 下载，不入库、不发布）=====
+plugins/electerm/
+plugins/dbx/
+
 # ===== IDE 工具生成 =====
 .qoder/
