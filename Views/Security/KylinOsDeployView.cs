@@ -51,6 +51,33 @@ public class KylinOsDeployView : SshToolBaseView
     private FeatureState _feature3State = FeatureState.Unknown;
     private bool _vncServiceRunning;
 
+    // ===== Tab4: PostgreSQL 连接配置 =====
+    private DataGrid _tab4Dg = new();
+    private Button _tab4ScanBtn = new(), _tab4DeployBtn = new(), _tab4UninstallBtn = new();
+    private TextBox _tab4Log = new();
+    private ObservableCollection<DeployItem> _tab4Items = new();
+    private FeatureState _feature4State = FeatureState.Unknown;
+
+    // Tab4: openGauss 配置文件部署目标（麒麟系统 openGauss 数据目录）
+    private const string OpenGaussDataDir = "/data/usershare/firestation/db/opengauss/data/single_node";
+    private const string OpenGaussBackupDir = OpenGaussDataDir + "/backup_conf";
+
+    /// <summary>本地开放配置目录：从 BaseDirectory 向上逐级查找 plugins/opengauss_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
+    private static string OpenGaussConfDir
+    {
+        get
+        {
+            var dir = AppDomain.CurrentDomain.BaseDirectory;
+            for (int i = 0; i < 5; i++)
+            {
+                var candidate = Path.Combine(dir, "plugins", "opengauss_conf");
+                if (Directory.Exists(candidate)) return candidate;
+                dir = Path.GetFullPath(Path.Combine(dir, ".."));
+            }
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "plugins", "opengauss_conf");
+        }
+    }
+
     // ===== 抽象属性实现 =====
     protected override PackIconKind TitleIcon => PackIconKind.Cog;
     protected override string TitleText => "KylinOS 运维策略";
@@ -65,15 +92,18 @@ public class KylinOsDeployView : SshToolBaseView
         InitTab1Items();
         InitTab2Items();
         InitTab3Items();
+        InitTab4Items();
 
-        // 顶部按钮行：定时重启 + 日志优化 + VNC Server + 复制结果（同一行，统一样式）
+        // 顶部按钮行：定时重启 + 日志优化 + VNC Server + PostgreSQL连接 + 复制结果（同一行，统一样式）
         var topBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
         var tab1Btn = MakeButton("定时重启", () => _tabControl.SelectedIndex = 0, false, PackIconKind.ClockOutline);
         var tab2Btn = MakeButton("日志优化", () => _tabControl.SelectedIndex = 1, false, PackIconKind.DeleteSweep);
         var tab3Btn = MakeButton("VNC Server", () => _tabControl.SelectedIndex = 2, false, PackIconKind.Monitor);
+        var tab4Btn = MakeButton("PostgreSQL连接", () => _tabControl.SelectedIndex = 3, false, PackIconKind.Database);
         topBtnRow.Children.Add(tab1Btn);
         topBtnRow.Children.Add(tab2Btn);
         topBtnRow.Children.Add(tab3Btn);
+        topBtnRow.Children.Add(tab4Btn);
         topBtnRow.Children.Add(MakeButton("复制结果", CopyResult, false, PackIconKind.ContentCopy));
         StatusText.VerticalAlignment = VerticalAlignment.Center;
         StatusText.Margin = new Thickness(16, 0, 0, 0);
@@ -95,6 +125,10 @@ public class KylinOsDeployView : SshToolBaseView
         var tab3 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
         tab3.Content = BuildTab3Content();
         _tabControl.Items.Add(tab3);
+
+        var tab4 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tab4.Content = BuildTab4Content();
+        _tabControl.Items.Add(tab4);
 
         topPanel.Children.Add(_tabControl);
 
@@ -242,6 +276,56 @@ public class KylinOsDeployView : SshToolBaseView
         return panel;
     }
 
+    private void InitTab4Items()
+    {
+        _tab4Items.Clear();
+        _tab4Items.Add(new DeployItem { ItemName = "pg_hba.conf", RemotePath = $"{OpenGaussDataDir}/pg_hba.conf" });
+        _tab4Items.Add(new DeployItem { ItemName = "postgresql.conf", RemotePath = $"{OpenGaussDataDir}/postgresql.conf" });
+        _tab4Items.Add(new DeployItem { ItemName = "backup_conf/", RemotePath = $"{OpenGaussBackupDir}/" });
+        // 补齐到 5 行，与其他 Tab 表格行数一致（样式统一）
+        _tab4Items.Add(new DeployItem { StatusIcon = "" });
+        _tab4Items.Add(new DeployItem { StatusIcon = "" });
+    }
+
+    private StackPanel BuildTab4Content()
+    {
+        var panel = new StackPanel { Margin = new Thickness(8) };
+
+        // 信息卡片
+        panel.Children.Add(MakeInfoCard(new[]
+        {
+            "🗄️ 将开放配置（pg_hba.conf + postgresql.conf）部署到 openGauss 数据目录",
+            "📁 部署前自动备份原文件到 backup_conf/ 目录",
+            "🔄 部署后需重启 openGauss 或执行 gs_ctl reload 使配置生效"
+        }));
+
+        // DataGrid
+        _tab4Dg = BuildItemGrid(_tab4Items);
+        panel.Children.Add(_tab4Dg);
+
+        // 按钮行
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        _tab4ScanBtn = MakeButton("扫描", ScanFeature4, false, PackIconKind.SearchWeb);
+        _tab4ScanBtn.IsEnabled = false;
+        btnRow.Children.Add(_tab4ScanBtn);
+        _tab4DeployBtn = MakeButton("部署", DeployFeature4, false, PackIconKind.PackageDown);
+        _tab4DeployBtn.IsEnabled = false;
+        btnRow.Children.Add(_tab4DeployBtn);
+        _tab4UninstallBtn = MakeButton("卸载", UninstallFeature4, false, PackIconKind.Delete);
+        _tab4UninstallBtn.IsEnabled = false;
+        btnRow.Children.Add(_tab4UninstallBtn);
+        btnRow.Children.Add(MakeButton("重启服务", RestartOpenGauss, false, PackIconKind.Restart));
+        btnRow.Children.Add(MakeButton("日志清理", () => _tab4Log.Clear(), false, PackIconKind.NotificationClearAll));
+        panel.Children.Add(btnRow);
+
+        // 独立日志区域
+        _tab4Log = MakeLogBox();
+        var scroll = new ScrollViewer { Content = _tab4Log, Height = 250, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        panel.Children.Add(new Border { Child = scroll, Margin = new Thickness(0, 4, 0, 0), BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4) });
+
+        return panel;
+    }
+
     // ================== 辅助 UI ==================
 
     private static TextBox MakeLogBox()
@@ -264,6 +348,7 @@ public class KylinOsDeployView : SshToolBaseView
     private void AppendTab1(string text) { _tab1Log.AppendText(text + "\n"); _tab1Log.ScrollToEnd(); }
     private void AppendTab2(string text) { _tab2Log.AppendText(text + "\n"); _tab2Log.ScrollToEnd(); }
     private void AppendTab3(string text) { _tab3Log.AppendText(text + "\n"); _tab3Log.ScrollToEnd(); }
+    private void AppendTab4(string text) { _tab4Log.AppendText(text + "\n"); _tab4Log.ScrollToEnd(); }
 
     /// <summary>线程安全日志（在 Task.Run 内部调用时投递到 UI 线程）</summary>
     private void AppendTab3ThreadSafe(string text)
@@ -328,7 +413,12 @@ public class KylinOsDeployView : SshToolBaseView
             MinHeight = 80
         };
         dg.Columns.Add(new DataGridTextColumn { Header = "文件名", Binding = new System.Windows.Data.Binding("ItemName"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
-        dg.Columns.Add(new DataGridTextColumn { Header = "远程路径", Binding = new System.Windows.Data.Binding("RemotePath"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
+        // 远程路径列限宽 + 省略号 + 悬浮提示（超长路径不再挤压「备注」列，四个 Tab 表格观感一致）
+        var pathStyle = new Style(typeof(TextBlock));
+        pathStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
+        pathStyle.Setters.Add(new Setter(TextBlock.TextWrappingProperty, TextWrapping.NoWrap));
+        pathStyle.Setters.Add(new Setter(System.Windows.Controls.ToolTipService.ToolTipProperty, new System.Windows.Data.Binding("RemotePath")));
+        dg.Columns.Add(new DataGridTextColumn { Header = "远程路径", Binding = new System.Windows.Data.Binding("RemotePath"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), MaxWidth = 340, IsReadOnly = true, ElementStyle = pathStyle });
         dg.Columns.Add(new DataGridTextColumn { Header = "状态", Binding = new System.Windows.Data.Binding("StatusIcon"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
         dg.Columns.Add(new DataGridTextColumn { Header = "备注", Binding = new System.Windows.Data.Binding("Detail"), Width = new DataGridLength(1, DataGridLengthUnitType.Star), IsReadOnly = true });
         return dg;
@@ -360,6 +450,9 @@ public class KylinOsDeployView : SshToolBaseView
         _tab3Items.Add(new DeployItem { ItemName = "x11vnc (二进制)", RemotePath = "/usr/local/bin/x11vnc" });
         _tab3Items.Add(new DeployItem { ItemName = "x11vnc.passwd", RemotePath = "/etc/x11vnc.passwd" });
         _tab3Items.Add(new DeployItem { ItemName = "x11vnc.service", RemotePath = "/etc/systemd/system/x11vnc.service" });
+        // 补齐到 5 行，与其他 Tab 表格行数一致（样式统一）
+        _tab3Items.Add(new DeployItem { StatusIcon = "" });
+        _tab3Items.Add(new DeployItem { StatusIcon = "" });
     }
 
     // ================== 连接状态回调 ==================
@@ -369,6 +462,7 @@ public class KylinOsDeployView : SshToolBaseView
         _tab1ScanBtn.IsEnabled = true;
         _tab2ScanBtn.IsEnabled = true;
         _tab3ScanBtn.IsEnabled = true;
+        _tab4ScanBtn.IsEnabled = true;
     }
 
     protected override void OnDisconnected()
@@ -381,6 +475,15 @@ public class KylinOsDeployView : SshToolBaseView
         _tab1ScanBtn.IsEnabled = _tab1DeployBtn.IsEnabled = _tab1UninstallBtn.IsEnabled = _tab1VerifyBtn.IsEnabled = false;
         _tab2ScanBtn.IsEnabled = _tab2DeployBtn.IsEnabled = _tab2UninstallBtn.IsEnabled = _tab2VerifyBtn.IsEnabled = false;
         _tab3ScanBtn.IsEnabled = _tab3DeployBtn.IsEnabled = _tab3StartBtn.IsEnabled = _tab3StopBtn.IsEnabled = _tab3UninstallBtn.IsEnabled = false;
+        _tab4ScanBtn.IsEnabled = _tab4DeployBtn.IsEnabled = _tab4UninstallBtn.IsEnabled = false;
+    }
+
+    private void UpdateTab4Buttons()
+    {
+        var connected = Ssh != null && Ssh.IsConnected;
+        _tab4ScanBtn.IsEnabled = connected;
+        _tab4DeployBtn.IsEnabled = connected && (_feature4State == FeatureState.NotDeployed || _feature4State == FeatureState.Partial);
+        _tab4UninstallBtn.IsEnabled = connected && (_feature4State == FeatureState.Deployed || _feature4State == FeatureState.Partial);
     }
 
     private void UpdateTab3Buttons()
@@ -1204,4 +1307,275 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 # 每月 1 日 01:00 执行（在定时重启之后一小时，避免冲突）
 0 1 1 * * root /usr/local/bin/clean-logs.sh
 ";
+
+    // ================== 功能四：PostgreSQL 连接配置 ==================
+
+    private async void ScanFeature4()
+    {
+        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        _tab4ScanBtn.IsEnabled = false;
+        SetStatus("正在扫描 PostgreSQL 连接配置...", true);
+        AppendTab4("\n━━━━ PostgreSQL连接：扫描 ━━━━");
+
+        try
+        {
+            var ssh = Ssh;
+            await Task.Run(() =>
+            {
+                // 检查目标目录是否存在
+                var dirOk = RunCommand(ssh, $"test -d {OpenGaussDataDir} && echo OK || echo MISSING").Trim().Contains("OK");
+                Dispatcher.Invoke(() => AppendTab4($"  数据目录: {(dirOk ? "✅ 存在" : "❌ 不存在")} - {OpenGaussDataDir}"));
+
+                int deployed = 0;
+                var scanCmds = new (string cmd, int idx)[]
+                {
+                    ($"test -f {OpenGaussDataDir}/pg_hba.conf && echo OK || echo MISSING", 0),
+                    ($"test -f {OpenGaussDataDir}/postgresql.conf && echo OK || echo MISSING", 1),
+                };
+
+                foreach (var (cmd, idx) in scanCmds)
+                {
+                    var output = RunCommand(ssh, cmd).Trim();
+                    var ok = output.Contains("OK");
+                    Dispatcher.Invoke(() =>
+                    {
+                        _tab4Items[idx].IsDeployed = ok;
+                        _tab4Items[idx].StatusIcon = ok ? "✅" : "❌";
+                        _tab4Items[idx].Detail = ok ? "文件存在" : "文件缺失";
+                        _tab4Dg.Items.Refresh();
+                        AppendTab4($"  {_tab4Items[idx].ItemName} → {(ok ? "✅" : "❌")} {_tab4Items[idx].Detail}");
+                    });
+                    if (ok) deployed++;
+                }
+
+                // 检查 backup_conf 是否存在（判断是否已部署）
+                var backupOk = RunCommand(ssh, $"test -d {OpenGaussBackupDir} && echo OK || echo MISSING").Trim().Contains("OK");
+                Dispatcher.Invoke(() =>
+                {
+                    _tab4Items[2].StatusIcon = backupOk ? "📦" : "⬜";
+                    _tab4Items[2].Detail = backupOk ? "已部署（备份存在）" : "未部署";
+                    _tab4Dg.Items.Refresh();
+                    AppendTab4($"  backup_conf/ → {(backupOk ? "📦 已部署" : "⬜ 未部署")}");
+
+                    if (!dirOk) _feature4State = FeatureState.NotDeployed;
+                    else if (backupOk) _feature4State = FeatureState.Deployed;
+                    else if (deployed == 2) _feature4State = FeatureState.NotDeployed;  // 文件存在但没备份 = 未部署
+                    else _feature4State = FeatureState.Partial;
+                    UpdateTab4Buttons();
+                    SetStatus($"PostgreSQL连接扫描完成: {deployed}/2", deployed > 0);
+                });
+            });
+        }
+        catch (Exception ex)
+        {
+            AppendTab4($"❌ 扫描失败: {ex.Message}");
+            SetStatus($"扫描失败: {ex.Message}", false);
+            _feature4State = FeatureState.Failed;
+            UpdateTab4Buttons();
+        }
+        finally { _tab4ScanBtn.IsEnabled = true; }
+    }
+
+    private async void DeployFeature4()
+    {
+        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (Sftp == null || !Sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
+
+        var sshUser = UserBox.Text.Trim();
+        var sshPass = PassBox.Password;
+
+        _tab4DeployBtn.IsEnabled = false;
+        _tab4ScanBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus("正在部署 PostgreSQL 连接配置...", true);
+        AppendTab4("\n━━━━ PostgreSQL连接：部署 ━━━━");
+
+        try
+        {
+            var ssh = Ssh;
+            var sftp = Sftp;
+
+            await Task.Run(() =>
+            {
+                // Step 1: 确保目标目录存在
+                RunCommandSudo(ssh, $"mkdir -p {OpenGaussDataDir}", sshUser, sshPass);
+
+                // Step 2: 创建备份目录
+                RunCommandSudo(ssh, $"mkdir -p {OpenGaussBackupDir}", sshUser, sshPass);
+                Dispatcher.Invoke(() => AppendTab4("  ✅ 备份目录已创建: backup_conf/"));
+
+                // Step 3: 备份原文件并上传新文件
+                var files = new[] { "pg_hba.conf", "postgresql.conf" };
+                var localDir = OpenGaussConfDir;
+
+                for (int idx = 0; idx < files.Length; idx++)
+                {
+                    var f = files[idx];
+                    var remotePath = $"{OpenGaussDataDir}/{f}";
+                    var backupPath = $"{OpenGaussBackupDir}/{f}";
+
+                    // 备份原文件（如果存在且未备份）
+                    var exists = RunCommand(ssh, $"test -f {remotePath} && echo OK || echo MISSING").Trim().Contains("OK");
+                    var backedUp = RunCommand(ssh, $"test -f {backupPath} && echo OK || echo MISSING").Trim().Contains("OK");
+                    if (exists && !backedUp)
+                    {
+                        RunCommandSudo(ssh, $"cp {remotePath} {backupPath}", sshUser, sshPass);
+                        Dispatcher.Invoke(() => AppendTab4($"  📦 {f} → 备份到 backup_conf/"));
+                    }
+
+                    // 上传新文件
+                    var localFile = Path.Combine(localDir, f);
+                    if (!File.Exists(localFile)) throw new Exception($"本地配置文件缺失: {localFile}");
+
+                    var tmpFile = $"/tmp/{f}_{Guid.NewGuid():N}";
+                    using (var fs = File.OpenRead(localFile))
+                        sftp.UploadFile(fs, tmpFile, true);
+                    RunCommandSudo(ssh, $"mv {tmpFile} {remotePath} && chmod 600 {remotePath}", sshUser, sshPass);
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        _tab4Items[idx].StatusIcon = "✅";
+                        _tab4Items[idx].Detail = "已部署";
+                        _tab4Dg.Items.Refresh();
+                        AppendTab4($"  ✅ {f} 已部署");
+                    });
+                }
+
+                // 更新 backup_conf 状态
+                Dispatcher.Invoke(() =>
+                {
+                    _tab4Items[2].StatusIcon = "📦";
+                    _tab4Items[2].Detail = "已部署";
+                    _tab4Dg.Items.Refresh();
+                });
+            });
+
+            AppendTab4("━━━━ 部署完成 ━━━━\n");
+            AppendTab4("⚠️ 配置文件已更新，需重启 openGauss 或执行 gs_ctl reload 使配置生效。点击「重启服务」按钮执行重启。");
+            SetStatus("PostgreSQL连接配置部署完成", true);
+            _feature4State = FeatureState.Deployed;
+            UpdateTab4Buttons();
+        }
+        catch (Exception ex)
+        {
+            AppendTab4($"❌ 部署失败: {ex.Message}");
+            SetStatus($"部署失败: {ex.Message}", false);
+            _tab4DeployBtn.IsEnabled = true;
+            _tab4ScanBtn.IsEnabled = true;
+        }
+        finally { DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private async void UninstallFeature4()
+    {
+        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (MessageBox.Show("确认卸载 PostgreSQL 连接配置？\n\n将恢复原始 pg_hba.conf 和 postgresql.conf", "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+
+        var sshUser = UserBox.Text.Trim();
+        var sshPass = PassBox.Password;
+
+        _tab4UninstallBtn.IsEnabled = false;
+        _tab4ScanBtn.IsEnabled = false;
+        _tab4DeployBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus("正在卸载 PostgreSQL 连接配置...", true);
+        AppendTab4("\n━━━━ PostgreSQL连接：卸载 ━━━━");
+
+        try
+        {
+            var ssh = Ssh;
+            int remaining = 0;
+            await Task.Run(() =>
+            {
+                var files = new[] { "pg_hba.conf", "postgresql.conf" };
+                foreach (var f in files)
+                {
+                    var backupPath = $"{OpenGaussBackupDir}/{f}";
+                    var remotePath = $"{OpenGaussDataDir}/{f}";
+                    var hasBackup = RunCommand(ssh, $"test -f {backupPath} && echo OK || echo MISSING").Trim().Contains("OK");
+
+                    if (hasBackup)
+                    {
+                        RunCommandSudo(ssh, $"mv {backupPath} {remotePath}", sshUser, sshPass);
+                        Dispatcher.Invoke(() => AppendTab4($"  ↩️ {f} → 已恢复为原始配置"));
+                    }
+                    else
+                    {
+                        remaining++;
+                        Dispatcher.Invoke(() => AppendTab4($"  ⚠️ {f} → 备份文件不存在，无法恢复"));
+                    }
+                }
+
+                // 清理备份目录
+                RunCommandSudo(ssh, $"rmdir {OpenGaussBackupDir} 2>/dev/null", sshUser, sshPass);
+                Dispatcher.Invoke(() => AppendTab4("  🗑️ backup_conf/ 目录已清理"));
+            });
+
+            if (remaining == 0)
+            {
+                AppendTab4("━━━━ 卸载完成，配置已恢复 ━━━━\n");
+                AppendTab4("⚠️ 配置已恢复为原始版本，需重启 openGauss 或执行 gs_ctl reload 使配置生效。");
+                SetStatus("PostgreSQL连接配置已卸载", true);
+                _feature4State = FeatureState.NotDeployed;
+                UpdateTab4Buttons();
+                ScanFeature4();
+            }
+            else
+            {
+                AppendTab4($"⚠️ {remaining} 个文件备份缺失，无法完全恢复\n");
+                SetStatus($"卸载不完整: {remaining} 个文件备份缺失", false);
+                _tab4UninstallBtn.IsEnabled = true;
+                _tab4ScanBtn.IsEnabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendTab4($"❌ 卸载失败: {ex.Message}");
+            SetStatus($"卸载失败: {ex.Message}", false);
+            _tab4UninstallBtn.IsEnabled = true;
+            _tab4ScanBtn.IsEnabled = true;
+        }
+        finally { DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private void RestartOpenGauss()
+    {
+        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        var sshUser = UserBox.Text.Trim();
+        var sshPass = PassBox.Password;
+        AppendTab4("\n━━━━ 重启 openGauss 服务 ━━━━");
+        try
+        {
+            // 尝试 gs_ctl reload（不重启，仅重载配置）
+            var output = RunCommandSudo(Ssh, $"su - omm -c 'gs_ctl reload -D {OpenGaussDataDir}' 2>&1", sshUser, sshPass);
+            AppendTab4($"  gs_ctl reload: {output.Trim()}");
+            if (output.Contains("server signaled") || output.Contains("PID"))
+            {
+                AppendTab4("  ✅ 配置重载成功（无需重启）");
+                SetStatus("openGauss 配置已重载", true);
+            }
+            else
+            {
+                // 回退：尝试 systemctl restart
+                AppendTab4("  gs_ctl reload 未成功，尝试 systemctl restart...");
+                var output2 = RunCommandSudo(Ssh, "systemctl restart opengauss 2>&1 || systemctl restart gaussdb 2>&1 || echo RESTART_FAILED", sshUser, sshPass);
+                AppendTab4($"  systemctl: {output2.Trim()}");
+                if (output2.Contains("RESTART_FAILED"))
+                {
+                    AppendTab4("  ⚠️ 自动重启失败，请手动重启 openGauss");
+                    SetStatus("重启失败，请手动执行", false);
+                }
+                else
+                {
+                    AppendTab4("  ✅ openGauss 已重启");
+                    SetStatus("openGauss 已重启", true);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendTab4($"❌ 重启失败: {ex.Message}");
+            SetStatus($"重启失败: {ex.Message}", false);
+        }
+    }
 }
