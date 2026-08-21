@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.Win32;
+using MySqlConnector;
 using ToolHelper.Services;
 using PackIcon = MaterialDesignThemes.Wpf.PackIcon;
 using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
@@ -12,9 +15,8 @@ using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
 namespace ToolHelper.Views.Database;
 
 /// <summary>
-/// 数据库外挂（DBX）启动器：按需下载/删除/更新便携版，之后点击启动。
+/// 数据库外挂连接：DBX 下载/管理 + MySQL/openGauss 填参连接（连接测试 + dbx:// 深链唤起，不传密码）。
 /// 发布不打包插件，运行时从 GitHub latest release 下载 x64-portable.zip 版。
-/// 结构镜像 ElectermLauncherView（SSH 外挂）增强版，仅替换 dbx 专属参数。
 /// </summary>
 public class DbxLauncherView : UserControl
 {
@@ -24,7 +26,26 @@ public class DbxLauncherView : UserControl
     private Button _downloadBtn = new();
     private Button _deleteBtn = new();
     private Button _updateBtn = new();
+    private TabControl _tabControl = new();
+    private Button _tabManageBtn = new();
+    private Button _tabConnectBtn = new();
+    private TextBlock _statusText = new();
     private bool _built;
+
+    // 数据库填参连接区
+    private ComboBox _dbTypeCombo = new();
+    private TextBox _hostBox = new();
+    private TextBox _portBox = new();
+    private TextBox _userBox = new();
+    private PasswordBox _passBox = new();
+    private TextBox _dbNameBox = new();
+
+    // 数据库类型：显示名 / dbx type / 默认端口
+    private static readonly (string Name, string Type, string Port)[] DbTypes =
+    {
+        ("MySQL", "mysql", "3306"),
+        ("openGauss", "opengauss", "5432"),
+    };
 
     public DbxLauncherView()
     {
@@ -39,7 +60,7 @@ public class DbxLauncherView : UserControl
             BuildUI();
             // 视图高度钉在宿主视口上（踩坑记录 #15 同款方案）：宿主向视图传递无限高度，
             // 星号行/填充区无法按比例分配；钉住高度后日志区才能随窗口大小自动伸缩
-            ViewportFitHelper.FitToViewport(this, 480);
+            ViewportFitHelper.FitToViewport(this, 520);
         }
         // 视图被 MainViewModel 缓存复用（GetOrCreateView），每次切入都必须重新检测插件状态：
         // 修复"手动删除插件目录后下载按钮仍禁用"的问题（踩坑记录 #22）
@@ -105,34 +126,37 @@ public class DbxLauncherView : UserControl
 
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
         titleRow.Children.Add(new PackIcon { Kind = PackIconKind.Database, Width = 28, Height = 28, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
-        titleRow.Children.Add(new TextBlock { Text = "  数据库外挂", FontSize = 20, FontWeight = FontWeights.Bold, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
+        titleRow.Children.Add(new TextBlock { Text = "  数据库外挂连接", FontSize = 20, FontWeight = FontWeights.Bold, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
         top.Children.Add(titleRow);
 
         top.Children.Add(new TextBlock
         {
-            Text = "点击启动 DBX 通用数据库客户端（Apache-2.0 开源，支持 90+ 数据库）。首次使用需联网下载插件。",
+            Text = "通过 DBX 外挂连接数据库（MySQL/openGauss），本界面仅做连接测试与日志展示。首次使用需联网下载插件。",
             FontSize = 13, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
         });
 
-        var info = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-        _statusInfoText.FontSize = 12;
-        _statusInfoText.TextWrapping = TextWrapping.Wrap;
-        info.Children.Add(MakeInfoRow("插件状态:", _statusInfoText));
-        info.Children.Add(MakeInfoRow("存放目录:", "plugins\\dbx\\"));
-        info.Children.Add(MakeInfoRow("许可证:", "Apache-2.0"));
-        top.Children.Add(info);
+        // ── Tab 切换按钮行（与 KylinOS 运维策略同款：隐藏 Tab 标题，由上方按钮切换）──
+        var tabBtnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        _tabManageBtn = MakeButton("插件管理", () => SwitchTab(0), false, PackIconKind.PackageVariant);
+        tabBtnRow.Children.Add(_tabManageBtn);
+        _tabConnectBtn = MakeButton("外挂连接", () => SwitchTab(1), false, PackIconKind.LinkVariant);
+        tabBtnRow.Children.Add(_tabConnectBtn);
+        _statusText.VerticalAlignment = VerticalAlignment.Center;
+        _statusText.Margin = new Thickness(16, 0, 0, 0);
+        _statusText.FontSize = 13;
+        tabBtnRow.Children.Add(_statusText);
+        top.Children.Add(tabBtnRow);
 
-        var btnRow = new StackPanel { Orientation = Orientation.Horizontal };
-        _launchBtn = MakeButton("启动外挂", Launch, true, PackIconKind.Database);
-        btnRow.Children.Add(_launchBtn);
-        _downloadBtn = MakeButton("下载插件", Download, false, PackIconKind.CloudDownload);
-        btnRow.Children.Add(_downloadBtn);
-        _deleteBtn = MakeButton("删除插件", DeletePlugin, false, PackIconKind.DeleteOutline);
-        btnRow.Children.Add(_deleteBtn);
-        _updateBtn = MakeButton("插件更新", CheckUpdate, false, PackIconKind.Update);
-        btnRow.Children.Add(_updateBtn);
-        btnRow.Children.Add(MakeButton("打开所在目录", OpenDir, false, PackIconKind.FolderOpen));
-        top.Children.Add(btnRow);
+        // ── TabControl（固定高度保证两个 Tab 排版一致）──
+        _tabControl = new TabControl { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Height = 230 };
+        var tabManage = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tabManage.Content = BuildManageTab();
+        _tabControl.Items.Add(tabManage);
+        var tabConnect = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tabConnect.Content = BuildConnectTab();
+        _tabControl.Items.Add(tabConnect);
+        top.Children.Add(_tabControl);
+        SwitchTab(0);
 
         DockPanel.SetDock(top, Dock.Top);
         root.Children.Add(top);
@@ -166,7 +190,7 @@ public class DbxLauncherView : UserControl
 
         Content = root;
         RefreshPluginState();
-        AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装"));
+        AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装") + "；「外挂连接」Tab 可填参唤起 DBX");
     }
 
     /// <summary>日志写入：带 [HH:mm:ss] 时间戳；进度类消息替换末行避免刷屏</summary>
@@ -342,17 +366,293 @@ public class DbxLauncherView : UserControl
         catch (Exception ex) { AppendLog($"打开目录失败: {ex.Message}"); }
     }
 
-    private StackPanel MakeInfoRow(string label, TextBlock value)
+    // ========== 数据库填参连接区辅助 ==========
+
+    private TextBox MakeBox(string hint, string defaultText = "", int minWidth = 120)
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-        row.Children.Add(new TextBlock { Text = label, FontSize = 12, FontWeight = FontWeights.SemiBold, Width = 100 });
-        row.Children.Add(value);
-        return row;
+        var tb = new TextBox
+        {
+            FontFamily = new FontFamily("Microsoft YaHei"),
+            FontSize = 13,
+            Margin = new Thickness(0, 0, 6, 0),
+            MinWidth = minWidth,
+            Text = defaultText
+        };
+        var style = TryFindResource("MaterialDesignOutlinedTextBox") as Style;
+        if (style != null) tb.Style = style;
+        MaterialDesignThemes.Wpf.HintAssist.SetHint(tb, hint);
+        return tb;
     }
 
-    private StackPanel MakeInfoRow(string label, string value)
+    private PasswordBox MakePasswordBox(string hint, int minWidth = 120)
     {
-        return MakeInfoRow(label, new TextBlock { Text = value, FontSize = 12, TextWrapping = TextWrapping.Wrap });
+        var pb = new PasswordBox
+        {
+            FontFamily = new FontFamily("Microsoft YaHei"),
+            FontSize = 13,
+            Margin = new Thickness(0, 0, 6, 0),
+            MinWidth = minWidth
+        };
+        var style = TryFindResource("MaterialDesignOutlinedPasswordBox") as Style
+                    ?? TryFindResource("MaterialDesignOutlinedTextBox") as Style;
+        if (style != null) pb.Style = style;
+        MaterialDesignThemes.Wpf.HintAssist.SetHint(pb, hint);
+        return pb;
+    }
+
+    private TextBlock MakeLabel(string text) => new()
+    {
+        Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold,
+        Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center
+    };
+
+    /// <summary>
+    /// 确保 dbx:// 协议已注册。portable 版 DBX 未启动过时不会注册协议（踩坑 #23 同款问题），
+    /// 用本地 DBX.exe 注册 HKCU 用户级协议（无需管理员权限）。
+    /// </summary>
+    private static bool EnsureDbxProtocolRegistered()
+    {
+        using (var cmdKey = Registry.CurrentUser.OpenSubKey(@"Software\Classes\dbx\shell\open\command"))
+        {
+            if (cmdKey?.GetValue(null) is string existing && existing.Contains("dbx", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        var exe = FindDbxExe();
+        if (string.IsNullOrEmpty(exe)) return false;
+
+        using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\dbx"))
+        {
+            key.SetValue(null, "URL:dbx Protocol");
+            key.SetValue("URL Protocol", "");
+        }
+        using (var cmd = Registry.CurrentUser.CreateSubKey(@"Software\Classes\dbx\shell\open\command"))
+        {
+            cmd.SetValue(null, $"\"{exe}\" \"%1\"");
+        }
+        return true;
+    }
+
+    // ========== 连接测试（MySQL 直连 / openGauss 走 Java 代理）==========
+
+    private async void TestDbConnection()
+    {
+        var host = _hostBox.Text.Trim();
+        var portText = _portBox.Text.Trim();
+        var user = _userBox.Text.Trim();
+        var pass = _passBox.Password;
+        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(user))
+        { AppendLog("连接测试失败：请输入主机和用户名"); return; }
+        if (_dbTypeCombo.SelectedIndex < 0 || _dbTypeCombo.SelectedIndex >= DbTypes.Length) return;
+        var dbType = DbTypes[_dbTypeCombo.SelectedIndex].Type;
+        if (!int.TryParse(portText, out int port)) port = dbType == "mysql" ? 3306 : 5432;
+
+        AppendLog($"正在测试连接 {host}:{port} ({dbType}) ...");
+        try
+        {
+            if (dbType == "mysql")
+            {
+                var connStr = new MySqlConnectionStringBuilder
+                {
+                    Server = host, Port = (uint)port, UserID = user,
+                    Password = pass, ConnectionTimeout = 5
+                }.ConnectionString;
+                using var testConn = new MySqlConnection(connStr);
+                await testConn.OpenAsync();
+                using var cmd = new MySqlCommand("SELECT VERSION()", testConn);
+                var version = await cmd.ExecuteScalarAsync();
+                AppendLog($"连接测试成功：MySQL {version}");
+                SetStatus($"连接测试成功! MySQL {version}", true);
+            }
+            else
+            {
+                using var testProxy = new OpenGaussProxyClient();
+                await testProxy.ConnectAsync(host, portText, user, pass);
+                var version = await testProxy.GetVersionAsync();
+                AppendLog($"连接测试成功：{version}");
+                SetStatus($"连接测试成功! {(version.Length > 60 ? version[..60] + "..." : version)}", true);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"连接测试失败: {ex.Message}");
+            SetStatus($"连接测试失败: {ex.Message}", false);
+        }
+    }
+
+    // ========== 外挂连接（通过 dbx:// 唤起，密码不传）==========
+
+    private void LaunchDbxConnection()
+    {
+        var host = _hostBox.Text.Trim();
+        var portText = _portBox.Text.Trim();
+        var user = _userBox.Text.Trim();
+        var dbName = _dbNameBox.Text.Trim();
+        if (string.IsNullOrEmpty(host)) { AppendLog("外挂连接失败：请输入主机"); return; }
+        if (_dbTypeCombo.SelectedIndex < 0 || _dbTypeCombo.SelectedIndex >= DbTypes.Length) return;
+        var dbType = DbTypes[_dbTypeCombo.SelectedIndex].Type;
+
+        // 协议未注册时自动注册（portable 版未启动过会弹「获取打开此 dbx 链接的应用」）
+        if (!EnsureDbxProtocolRegistered())
+        {
+            AppendLog("未检测到 dbx:// 协议且未找到本地 DBX，请先点击「下载插件」并启动一次 DBX");
+            return;
+        }
+
+        var sb = new StringBuilder("dbx://connection/new?type=").Append(dbType);
+        sb.Append("&host=").Append(Uri.EscapeDataString(host));
+        sb.Append("&port=").Append(Uri.EscapeDataString(portText));
+        if (!string.IsNullOrEmpty(user)) sb.Append("&user=").Append(Uri.EscapeDataString(user));
+        if (!string.IsNullOrEmpty(dbName)) sb.Append("&database=").Append(Uri.EscapeDataString(dbName));
+        sb.Append("&one_time=true");
+
+        var url = sb.ToString();
+        AppendLog($"唤起 DBX（{dbType} 连接）: {host}:{portText}");
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            AppendLog("已唤起 DBX，请在 DBX 中输入密码完成连接");
+            SetStatus("已唤起 DBX，请在 DBX 中输入密码完成连接", true);
+        }
+        catch (Exception ex)
+        {
+            // 协议刚注册时系统可能尚未感知，回退：直接用本地 exe 携带 URL 参数启动
+            var exe = FindDbxExe();
+            if (!string.IsNullOrEmpty(exe))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo { FileName = exe, Arguments = $"\"{url}\"", UseShellExecute = true });
+                    AppendLog("已唤起 DBX，请在 DBX 中输入密码完成连接");
+                    SetStatus("已唤起 DBX，请在 DBX 中输入密码完成连接", true);
+                    return;
+                }
+                catch (Exception ex2) { AppendLog($"外挂连接失败: {ex2.Message}"); }
+            }
+            AppendLog($"外挂连接失败: {ex.Message}");
+            SetStatus($"外挂连接失败: {ex.Message}", false);
+        }
+    }
+
+    /// <summary>Tab1 插件管理：KylinOS 同款信息卡片 + 插件按钮行</summary>
+    private StackPanel BuildManageTab()
+    {
+        var panel = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
+
+        // 信息卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
+        var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
+        var stateRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+        stateRow.Children.Add(new TextBlock { Text = "📦 插件状态：", FontSize = 12, FontWeight = FontWeights.SemiBold });
+        _statusInfoText.FontSize = 12;
+        _statusInfoText.TextWrapping = TextWrapping.Wrap;
+        stateRow.Children.Add(_statusInfoText);
+        cardRows.Children.Add(stateRow);
+        cardRows.Children.Add(new TextBlock { Text = "📁 存放目录：plugins\\dbx\\（按需下载，发布包不预置）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        cardRows.Children.Add(new TextBlock { Text = "📜 许可证：Apache-2.0（通用数据库客户端，支持 90+ 数据库）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(4),
+            Margin = new Thickness(0, 0, 0, 8),
+            Child = cardRows
+        });
+
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal };
+        _launchBtn = MakeButton("启动外挂", Launch, true, PackIconKind.Database);
+        btnRow.Children.Add(_launchBtn);
+        _downloadBtn = MakeButton("下载插件", Download, false, PackIconKind.CloudDownload);
+        btnRow.Children.Add(_downloadBtn);
+        _deleteBtn = MakeButton("删除插件", DeletePlugin, false, PackIconKind.DeleteOutline);
+        btnRow.Children.Add(_deleteBtn);
+        _updateBtn = MakeButton("插件更新", CheckUpdate, false, PackIconKind.Update);
+        btnRow.Children.Add(_updateBtn);
+        btnRow.Children.Add(MakeButton("打开所在目录", OpenDir, false, PackIconKind.FolderOpen));
+        panel.Children.Add(btnRow);
+
+        return panel;
+    }
+
+    /// <summary>Tab2 外挂连接：说明卡片 + 填参行 + 连接测试/外挂连接按钮</summary>
+    private StackPanel BuildConnectTab()
+    {
+        var panel = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
+
+        // 说明卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
+        var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
+        cardRows.Children.Add(new TextBlock { Text = "🔗 点击「外挂连接」通过 dbx:// 深链唤起 DBX 并预填连接信息，密码在 DBX 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        cardRows.Children.Add(new TextBlock { Text = "📌 类型切换自动填充默认端口；数据库名可选，填写后作为 database 参数预填", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(4),
+            Margin = new Thickness(0, 0, 0, 8),
+            Child = cardRows
+        });
+
+        var connRow1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        connRow1.Children.Add(MakeLabel("类型:"));
+        _dbTypeCombo.FontFamily = new FontFamily("Microsoft YaHei");
+        _dbTypeCombo.FontSize = 13;
+        _dbTypeCombo.MinWidth = 120;
+        _dbTypeCombo.Margin = new Thickness(0, 0, 6, 0);
+        var comboStyle = TryFindResource("MaterialDesignOutlinedComboBox") as Style;
+        if (comboStyle != null) _dbTypeCombo.Style = comboStyle;
+        foreach (var t in DbTypes) _dbTypeCombo.Items.Add(t.Name);
+        _dbTypeCombo.SelectionChanged += (s, e) =>
+        {
+            if (_dbTypeCombo.SelectedIndex >= 0 && _dbTypeCombo.SelectedIndex < DbTypes.Length)
+                _portBox.Text = DbTypes[_dbTypeCombo.SelectedIndex].Port;
+        };
+        connRow1.Children.Add(_dbTypeCombo);
+        connRow1.Children.Add(MakeLabel("主机:"));
+        _hostBox = MakeBox("IP或主机名", "", 180);
+        connRow1.Children.Add(_hostBox);
+        connRow1.Children.Add(MakeLabel("端口:"));
+        _portBox = MakeBox("端口", "3306", 70);
+        connRow1.Children.Add(_portBox);
+        connRow1.Children.Add(MakeLabel("用户名:"));
+        _userBox = MakeBox("用户名", "", 120);
+        connRow1.Children.Add(_userBox);
+        panel.Children.Add(connRow1);
+
+        var connRow2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        connRow2.Children.Add(MakeLabel("密码:"));
+        _passBox = MakePasswordBox("密码");
+        connRow2.Children.Add(_passBox);
+        connRow2.Children.Add(MakeLabel("数据库:"));
+        _dbNameBox = MakeBox("数据库（可选，外挂连接预填）", "", 140);
+        connRow2.Children.Add(_dbNameBox);
+        panel.Children.Add(connRow2);
+
+        var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
+        connBtnRow.Children.Add(MakeButton("连接测试", TestDbConnection, false, PackIconKind.Network));
+        connBtnRow.Children.Add(MakeButton("外挂连接", LaunchDbxConnection, true, PackIconKind.OpenInApp));
+        panel.Children.Add(connBtnRow);
+
+        _dbTypeCombo.SelectedIndex = 0;  // 默认 MySQL，触发端口联动
+        return panel;
+    }
+
+    /// <summary>切换 Tab 并同步按钮高亮（当前 Tab 按钮用 Raised 样式）</summary>
+    private void SwitchTab(int index)
+    {
+        _tabControl.SelectedIndex = index;
+        var active = TryFindResource("MaterialDesignRaisedButton") as Style;
+        var inactive = TryFindResource("MaterialDesignOutlinedButton") as Style;
+        _tabManageBtn.Style = index == 0 ? active : inactive;
+        _tabConnectBtn.Style = index == 1 ? active : inactive;
+    }
+
+    private void SetStatus(string msg, bool success)
+    {
+        _statusText.Text = msg;
+        _statusText.Foreground = success ? Brushes.Green : Brushes.Red;
     }
 
     private Button MakeButton(string text, Action handler, bool primary = false, PackIconKind icon = PackIconKind.Play)

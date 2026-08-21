@@ -7,6 +7,7 @@ using System.Windows.Media;
 using MaterialDesignThemes.Wpf;
 using Renci.SshNet;
 using Renci.SshNet.Sftp;
+using WpfBorder = System.Windows.Controls.Border;
 using DataGridTextColumn = System.Windows.Controls.DataGridTextColumn;
 
 namespace ToolHelper.Views.Security;
@@ -62,6 +63,18 @@ public class KylinOsDeployView : SshToolBaseView
     private const string OpenGaussDataDir = "/data/usershare/firestation/db/opengauss/data/single_node";
     private const string OpenGaussBackupDir = OpenGaussDataDir + "/backup_conf";
 
+    // ===== Tab6: KylinOS 漏洞扫描（kylin-offline-upgrade 本地提权，依赖 SSH）=====
+    private Button _vulScanBtn = new(), _vulRepairBtn = new(), _vulVerifyBtn = new();
+    private VulnerabilityResult? _vulLastResult;
+    private TextBox _vulLogBox = new();
+
+    // ===== Tab7: KylinOS 系统优化（服务/进程/定时任务，依赖 SSH）=====
+    private Button _optScanBtn = new(), _optOptimizeBtn = new(), _optVerifyBtn = new(), _optRestoreBtn = new();
+    private ObservableCollection<OptimizationItem> _optItems = new();
+    private DataGrid _optDataGrid = new();
+    private TextBox _optLogBox = new();
+    private TextBlock _optInfoText = new(), _optSystemInfoText = new();
+
     /// <summary>本地开放配置目录：从 BaseDirectory 向上逐级查找 plugins/opengauss_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
     private static string OpenGaussConfDir
     {
@@ -93,17 +106,22 @@ public class KylinOsDeployView : SshToolBaseView
         InitTab2Items();
         InitTab3Items();
         InitTab4Items();
+        InitTab7Items();
 
-        // 顶部按钮行：定时重启 + 日志优化 + VNC Server + PostgreSQL连接 + 复制结果（同一行，统一样式）
+        // 顶部按钮行：定时重启 + 日志优化 + VNC Server + PostgreSQL连接 + 漏洞扫描 + 系统优化 + 复制结果（同一行，统一样式）
         var topBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
         var tab1Btn = MakeButton("定时重启", () => _tabControl.SelectedIndex = 0, false, PackIconKind.ClockOutline);
         var tab2Btn = MakeButton("日志优化", () => _tabControl.SelectedIndex = 1, false, PackIconKind.DeleteSweep);
         var tab3Btn = MakeButton("VNC Server", () => _tabControl.SelectedIndex = 2, false, PackIconKind.Monitor);
         var tab4Btn = MakeButton("PostgreSQL连接", () => _tabControl.SelectedIndex = 3, false, PackIconKind.Database);
+        var tab6Btn = MakeButton("漏洞扫描", () => _tabControl.SelectedIndex = 4, false, PackIconKind.ShieldAlert);
+        var tab7Btn = MakeButton("系统优化", () => _tabControl.SelectedIndex = 5, false, PackIconKind.Flash);
         topBtnRow.Children.Add(tab1Btn);
         topBtnRow.Children.Add(tab2Btn);
         topBtnRow.Children.Add(tab3Btn);
         topBtnRow.Children.Add(tab4Btn);
+        topBtnRow.Children.Add(tab6Btn);
+        topBtnRow.Children.Add(tab7Btn);
         topBtnRow.Children.Add(MakeButton("复制结果", CopyResult, false, PackIconKind.ContentCopy));
         StatusText.VerticalAlignment = VerticalAlignment.Center;
         StatusText.Margin = new Thickness(16, 0, 0, 0);
@@ -129,6 +147,14 @@ public class KylinOsDeployView : SshToolBaseView
         var tab4 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
         tab4.Content = BuildTab4Content();
         _tabControl.Items.Add(tab4);
+
+        var tab6 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tab6.Content = BuildTab6Content();
+        _tabControl.Items.Add(tab6);
+
+        var tab7 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tab7.Content = BuildTab7Content();
+        _tabControl.Items.Add(tab7);
 
         // TabControl 直接挂到根容器（顶部面板之后 → 成为填充子元素，高度随窗口缩放）
         root.Children.Add(_tabControl);
@@ -335,6 +361,157 @@ public class KylinOsDeployView : SshToolBaseView
         return panel;
     }
 
+    #region Tab6: KylinOS 漏洞扫描（依赖 SSH）
+
+    private DockPanel BuildTab6Content()
+    {
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
+
+        // 信息卡片
+        top.Children.Add(MakeInfoCard(new[]
+        {
+            "🛡️ 漏洞名称: 麒麟离线升级工具本地权限提升漏洞",
+            "📦 影响组件: kylin-offline-upgrade",
+            "⚠️ 风险等级: 高危（本地提权 LPE）",
+            $"📁 修复方式: 安装官方安全补丁 (.deb) — plugins{Path.DirectorySeparatorChar}Security patch{Path.DirectorySeparatorChar}"
+        }));
+
+        // 操作按钮行
+        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        _vulScanBtn = MakeButton("扫描", DoVulScan, true, PackIconKind.SearchWeb);
+        _vulScanBtn.IsEnabled = false;
+        actionRow.Children.Add(_vulScanBtn);
+        _vulRepairBtn = MakeButton("修复", DoVulRepair, false, PackIconKind.Wrench);
+        _vulRepairBtn.IsEnabled = false;
+        actionRow.Children.Add(_vulRepairBtn);
+        _vulVerifyBtn = MakeButton("验证", DoVulVerify, false, PackIconKind.CheckCircle);
+        _vulVerifyBtn.IsEnabled = false;
+        actionRow.Children.Add(_vulVerifyBtn);
+        actionRow.Children.Add(MakeButton("日志清理", () => _vulLogBox.Clear(), false, PackIconKind.NotificationClearAll));
+        top.Children.Add(actionRow);
+
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _vulLogBox));
+
+        AppendTab6("点击 [连接SSH] 连接到麒麟系统，然后点击 [扫描] 开始检测漏洞。");
+        return panel;
+    }
+
+    #endregion
+
+    #region Tab7: KylinOS 系统优化（依赖 SSH）
+
+    private void InitTab7Items()
+    {
+        _optItems = new ObservableCollection<OptimizationItem>(GetOptimizationItems());
+    }
+
+    private DockPanel BuildTab7Content()
+    {
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
+
+        // 信息区（动态文本）
+        var infoBox = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        _optInfoText.Text = $"优化项数量: {_optItems.Count} 项  |  点击 [扫描] 开始检测目标系统";
+        _optInfoText.FontSize = 12;
+        _optSystemInfoText.Text = "目标系统: 未连接";
+        _optSystemInfoText.FontSize = 12;
+        _optSystemInfoText.FontWeight = FontWeights.SemiBold;
+        _optSystemInfoText.Margin = new Thickness(0, 0, 0, 2);
+        infoBox.Children.Add(_optSystemInfoText);
+        infoBox.Children.Add(_optInfoText);
+        infoBox.Children.Add(new TextBlock { Text = "风险提示: mask 为不可逆级停用（可用 [恢复选中] 还原），中风险项请根据业务需求谨慎选择", FontSize = 11, Foreground = Brushes.Orange, Margin = new Thickness(0, 2, 0, 0) });
+        top.Children.Add(infoBox);
+
+        // DataGrid
+        _optDataGrid.ItemsSource = _optItems;
+        _optDataGrid.AutoGenerateColumns = false;
+        _optDataGrid.CanUserAddRows = false;
+        _optDataGrid.CanUserReorderColumns = false;
+        _optDataGrid.IsReadOnly = false;
+        _optDataGrid.SelectionMode = DataGridSelectionMode.Single;
+        _optDataGrid.HeadersVisibility = DataGridHeadersVisibility.Column;
+        _optDataGrid.GridLinesVisibility = DataGridGridLinesVisibility.Horizontal;
+        _optDataGrid.AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(248, 249, 250));
+        _optDataGrid.MaxHeight = 300;
+        _optDataGrid.MinHeight = 160;
+
+        var colSelect = new DataGridCheckBoxColumn
+        {
+            Header = "选择",
+            Binding = new System.Windows.Data.Binding("IsSelected") { Mode = System.Windows.Data.BindingMode.TwoWay, UpdateSourceTrigger = System.Windows.Data.UpdateSourceTrigger.PropertyChanged },
+            Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
+            IsReadOnly = false
+        };
+        _optDataGrid.Columns.Add(colSelect);
+        _optDataGrid.Columns.Add(new DataGridTextColumn { Header = "序号", Binding = new System.Windows.Data.Binding("Id"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
+        _optDataGrid.Columns.Add(new DataGridTextColumn { Header = "优化项目名称", Binding = new System.Windows.Data.Binding("Name"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
+        _optDataGrid.Columns.Add(new DataGridTextColumn { Header = "风险", Binding = new System.Windows.Data.Binding("RiskLevel"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
+
+        // 状态列（彩色字体）
+        var statusTemplate = new DataTemplate();
+        var tbFactory = new FrameworkElementFactory(typeof(TextBlock));
+        tbFactory.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Status"));
+        tbFactory.SetBinding(TextBlock.ForegroundProperty, new System.Windows.Data.Binding("Status") { Converter = new OptStatusColorConverter() });
+        tbFactory.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+        statusTemplate.VisualTree = tbFactory;
+        _optDataGrid.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = "状态",
+            Width = new DataGridLength(1, DataGridLengthUnitType.Auto),
+            IsReadOnly = true,
+            CellTemplate = statusTemplate
+        });
+        _optDataGrid.Columns.Add(new DataGridTextColumn { Header = "类别", Binding = new System.Windows.Data.Binding("Category"), Width = new DataGridLength(1, DataGridLengthUnitType.Auto), IsReadOnly = true });
+
+        // 详情列（显示具体未优化原因，长文本省略+悬浮提示）
+        var detailStyle = new Style(typeof(TextBlock));
+        detailStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis));
+        detailStyle.Setters.Add(new Setter(System.Windows.Controls.ToolTipService.ToolTipProperty, new System.Windows.Data.Binding("ScanDetail")));
+        _optDataGrid.Columns.Add(new DataGridTextColumn { Header = "详情", Binding = new System.Windows.Data.Binding("ScanDetail"), Width = new DataGridLength(240), IsReadOnly = true, ElementStyle = detailStyle });
+        top.Children.Add(_optDataGrid);
+
+        // 选择按钮行
+        var selectRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 4) };
+        selectRow.Children.Add(MakeButton("全选", OptSelectAll, false, PackIconKind.SelectAll));
+        selectRow.Children.Add(MakeButton("全不选", OptSelectNone, false, PackIconKind.SelectOff));
+        selectRow.Children.Add(MakeButton("反选", OptInvertSelection, false, PackIconKind.SwapHorizontal));
+        top.Children.Add(selectRow);
+
+        // 操作按钮行
+        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        _optScanBtn = MakeButton("扫描", DoOptScan, true, PackIconKind.SearchWeb);
+        _optScanBtn.IsEnabled = false;
+        actionRow.Children.Add(_optScanBtn);
+        _optOptimizeBtn = MakeButton("优化选中", DoOptOptimize, false, PackIconKind.Flash);
+        _optOptimizeBtn.IsEnabled = false;
+        actionRow.Children.Add(_optOptimizeBtn);
+        _optVerifyBtn = MakeButton("验证", DoOptVerify, false, PackIconKind.CheckCircle);
+        _optVerifyBtn.IsEnabled = false;
+        actionRow.Children.Add(_optVerifyBtn);
+        _optRestoreBtn = MakeButton("恢复选中", DoOptRestore, false, PackIconKind.Undo);
+        _optRestoreBtn.IsEnabled = false;
+        actionRow.Children.Add(_optRestoreBtn);
+        actionRow.Children.Add(MakeButton("日志清理", () => _optLogBox.Clear(), false, PackIconKind.NotificationClearAll));
+        top.Children.Add(actionRow);
+
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+
+        // 操作日志区（填充剩余高度，随窗口缩放）
+        panel.Children.Add(BuildTabLogPanel(ref _optLogBox));
+
+        AppendTab7("点击 [连接SSH] 连接到麒麟系统，然后点击 [扫描] 开始检测待优化项。");
+        return panel;
+    }
+
+    #endregion
+
     /// <summary>构建 Tab 内操作日志面板：「操作日志」标签 + 填充剩余高度的深色日志区</summary>
     private static DockPanel BuildTabLogPanel(ref TextBox logBox)
     {
@@ -357,7 +534,7 @@ public class KylinOsDeployView : SshToolBaseView
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             MinHeight = 100
         };
-        panel.Children.Add(new Border
+        panel.Children.Add(new WpfBorder
         {
             Child = scroll,
             BorderBrush = new SolidColorBrush(Color.FromRgb(60, 65, 75)),
@@ -392,6 +569,8 @@ public class KylinOsDeployView : SshToolBaseView
     private void AppendTab2(string text) { _tab2Log.AppendText(text + "\n"); _tab2Log.ScrollToEnd(); }
     private void AppendTab3(string text) { _tab3Log.AppendText(text + "\n"); _tab3Log.ScrollToEnd(); }
     private void AppendTab4(string text) { _tab4Log.AppendText(text + "\n"); _tab4Log.ScrollToEnd(); }
+    private void AppendTab6(string text) { _vulLogBox.AppendText(text + "\n"); _vulLogBox.ScrollToEnd(); }
+    private void AppendTab7(string text) { _optLogBox.AppendText(text + "\n"); _optLogBox.ScrollToEnd(); }
 
     /// <summary>线程安全日志（在 Task.Run 内部调用时投递到 UI 线程）</summary>
     private void AppendTab3ThreadSafe(string text)
@@ -412,7 +591,7 @@ public class KylinOsDeployView : SshToolBaseView
         AppendTab3($"  🔑 已生成随机 VNC 密码: {pwd}（已填入密码框，请复制保存）");
     }
 
-    private Border MakeInfoCard(string[] lines, string? inputLabel = null, TextBox? inputBox = null)
+    private WpfBorder MakeInfoCard(string[] lines, string? inputLabel = null, TextBox? inputBox = null)
     {
         var sp = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
         foreach (var line in lines)
@@ -426,7 +605,7 @@ public class KylinOsDeployView : SshToolBaseView
             sp.Children.Add(row);
         }
 
-        return new Border
+        return new WpfBorder
         {
             Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
             BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
@@ -506,6 +685,9 @@ public class KylinOsDeployView : SshToolBaseView
         _tab2ScanBtn.IsEnabled = true;
         _tab3ScanBtn.IsEnabled = true;
         _tab4ScanBtn.IsEnabled = true;
+        _vulScanBtn.IsEnabled = true;
+        _optScanBtn.IsEnabled = true;
+        _optRestoreBtn.IsEnabled = true;
     }
 
     protected override void OnDisconnected()
@@ -519,6 +701,37 @@ public class KylinOsDeployView : SshToolBaseView
         _tab2ScanBtn.IsEnabled = _tab2DeployBtn.IsEnabled = _tab2UninstallBtn.IsEnabled = _tab2VerifyBtn.IsEnabled = false;
         _tab3ScanBtn.IsEnabled = _tab3DeployBtn.IsEnabled = _tab3StartBtn.IsEnabled = _tab3StopBtn.IsEnabled = _tab3UninstallBtn.IsEnabled = false;
         _tab4ScanBtn.IsEnabled = _tab4DeployBtn.IsEnabled = _tab4UninstallBtn.IsEnabled = false;
+        _vulScanBtn.IsEnabled = _vulRepairBtn.IsEnabled = _vulVerifyBtn.IsEnabled = false;
+        _optScanBtn.IsEnabled = _optOptimizeBtn.IsEnabled = _optVerifyBtn.IsEnabled = _optRestoreBtn.IsEnabled = false;
+    }
+
+    private void UpdateTab6Buttons()
+    {
+        var connected = Ssh != null && Ssh.IsConnected;
+        _vulScanBtn.IsEnabled = connected;
+        if (!connected)
+        {
+            _vulRepairBtn.IsEnabled = false;
+            _vulVerifyBtn.IsEnabled = false;
+            return;
+        }
+        _vulRepairBtn.IsEnabled = _vulLastResult?.IsVulnerable == true;
+        _vulVerifyBtn.IsEnabled = _vulLastResult?.Status is VulnerabilityStatus.Vulnerable or VulnerabilityStatus.Fixed;
+    }
+
+    private void UpdateTab7Buttons()
+    {
+        var connected = Ssh != null && Ssh.IsConnected;
+        _optScanBtn.IsEnabled = connected;
+        _optRestoreBtn.IsEnabled = connected;
+        if (!connected)
+        {
+            _optOptimizeBtn.IsEnabled = false;
+            _optVerifyBtn.IsEnabled = false;
+            return;
+        }
+        _optOptimizeBtn.IsEnabled = _optItems.Any(i => i.IsSelected && i.Status == "可优化");
+        _optVerifyBtn.IsEnabled = true;
     }
 
     private void UpdateTab4Buttons()
@@ -1620,5 +1833,1108 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
             AppendTab4($"❌ 重启失败: {ex.Message}");
             SetStatus($"重启失败: {ex.Message}", false);
         }
+    }
+
+    #region Tab6: 漏洞扫描逻辑（kylin-offline-upgrade 本地提权）
+
+    /// <summary>
+    /// 补丁目录：从 BaseDirectory 向上逐级查找 plugins/Security patch/
+    /// </summary>
+    private static string VulPatchDir
+    {
+        get
+        {
+            var dir = AppDomain.CurrentDomain.BaseDirectory;
+            for (int i = 0; i < 5; i++)
+            {
+                var candidate = Path.Combine(dir, "plugins", "Security patch");
+                if (Directory.Exists(candidate)) return candidate;
+                dir = Path.GetFullPath(Path.Combine(dir, ".."));
+            }
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "plugins", "Security patch");
+        }
+    }
+
+    private static List<string> GetAvailableVulPatches()
+    {
+        try
+        {
+            if (!Directory.Exists(VulPatchDir)) return new List<string>();
+            return Directory.GetFiles(VulPatchDir, "*.deb")
+                           .Select(Path.GetFileName)
+                           .Where(f => f != null)
+                           .Cast<string>()
+                           .OrderByDescending(f =>
+                           {
+                               var v = ExtractVulVersionFromFileName(f);
+                               return v != null ? DpkgVersion.Parse(v) : new DpkgVersion();
+                           })
+                           .ToList();
+        }
+        catch { return new List<string>(); }
+    }
+
+    private static string? GetBestVulPatch() => GetAvailableVulPatches().FirstOrDefault();
+
+    private static string? ExtractVulVersionFromFileName(string fileName)
+    {
+        var parts = Path.GetFileNameWithoutExtension(fileName).Split('_');
+        if (parts.Length >= 2) return parts[1];
+        return null;
+    }
+
+    // ================== 扫描 ==================
+
+    private async void DoVulScan()
+    {
+        _vulScanBtn.IsEnabled = false;
+        SetStatus("正在扫描...", true);
+        AppendTab6("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab6($"[{DateTime.Now:HH:mm:ss}] 开始扫描...");
+
+        try
+        {
+            var ssh = Ssh;
+            if (ssh == null || !ssh.IsConnected) throw new InvalidOperationException("SSH 未连接");
+            DisconnectBtn.IsEnabled = false;
+            var result = await Task.Run(() => ScanVulInternal(ssh));
+            _vulLastResult = result;
+            DisplayVulResult(result);
+            UpdateTab6Buttons();
+            SetStatus(result.IsVulnerable ? "发现漏洞" : "未发现漏洞", !result.IsVulnerable);
+        }
+        catch (Exception ex)
+        {
+            AppendTab6($"扫描失败: {ex.Message}");
+            SetStatus($"扫描失败: {ex.Message}", false);
+        }
+        finally { _vulScanBtn.IsEnabled = Ssh != null && Ssh.IsConnected; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private VulnerabilityResult ScanVulInternal(SshClient ssh)
+    {
+        var result = new VulnerabilityResult { ScanTime = DateTime.Now };
+        var osRelease = RunCommand(ssh, "cat /etc/os-release");
+        var kernel = RunCommand(ssh, "uname -r").Trim();
+        var arch = RunCommand(ssh, "arch").Trim();
+
+        result.OsName = ExtractField(osRelease, "NAME");
+        result.OsVersion = ExtractField(osRelease, "VERSION");
+        result.OsSp = ExtractField(osRelease, "VERSION_US");
+        result.KernelVersion = kernel;
+        result.Architecture = arch;
+
+        var dpkgOutput = RunCommand(ssh, "dpkg -l kylin-offline-upgrade 2>/dev/null");
+        result.CurrentVersion = ParseVulDpkgVersion(dpkgOutput);
+
+        if (result.CurrentVersion == null)
+        {
+            result.IsVulnerable = false;
+            result.Status = dpkgOutput.Contains("no packages found") || dpkgOutput.Contains("未安装")
+                ? VulnerabilityStatus.NotInstalled : VulnerabilityStatus.ScanFailed;
+            return result;
+        }
+
+        var bestPatch = GetBestVulPatch();
+        result.PatchFile = bestPatch;
+        result.FixedVersion = bestPatch != null ? (ExtractVulVersionFromFileName(bestPatch) ?? "0") : "0";
+
+        var current = DpkgVersion.Parse(result.CurrentVersion);
+        var fixed_ = DpkgVersion.Parse(result.FixedVersion);
+        result.IsVulnerable = current.CompareTo(fixed_) < 0;
+        result.Status = result.IsVulnerable ? VulnerabilityStatus.Vulnerable : VulnerabilityStatus.Fixed;
+        return result;
+    }
+
+    private void DisplayVulResult(VulnerabilityResult r)
+    {
+        AppendTab6($"扫描时间: {r.ScanTime:yyyy-MM-dd HH:mm:ss}");
+        AppendTab6($"目标系统: {r.OsName} {r.OsVersion} ({r.OsSp})");
+        AppendTab6($"内核版本: {r.KernelVersion}  架构: {r.Architecture}");
+        AppendTab6("");
+
+        if (r.Status == VulnerabilityStatus.NotInstalled)
+        {
+            AppendTab6("[结果] 未安装 kylin-offline-upgrade，不受此漏洞影响。");
+        }
+        else if (r.Status == VulnerabilityStatus.ScanFailed)
+        {
+            AppendTab6("[结果] 扫描失败，无法获取组件版本信息。");
+        }
+        else if (r.IsVulnerable)
+        {
+            AppendTab6("[结果] 发现漏洞!");
+            AppendTab6($"  组件: kylin-offline-upgrade");
+            AppendTab6($"  当前版本: {r.CurrentVersion}  <-- 存在漏洞");
+            AppendTab6($"  修复版本: {r.FixedVersion}  <-- 需升级到此版本");
+            AppendTab6($"  补丁文件: {r.PatchFile}");
+            AppendTab6("");
+            AppendTab6("漏洞描述:");
+            AppendTab6("  kylin-offline-upgrade 核心组件存在本地权限提升漏洞，");
+            AppendTab6("  普通用户可借此获得 root 权限，完全控制系统。");
+            AppendTab6("");
+            AppendTab6("修复方法:");
+            AppendTab6("  点击 [修复] 按钮，将自动上传并安装安全补丁。");
+        }
+        else
+        {
+            AppendTab6("[结果] 未发现漏洞（已修复）");
+            AppendTab6($"  组件: kylin-offline-upgrade");
+            AppendTab6($"  当前版本: {r.CurrentVersion}");
+            AppendTab6($"  修复版本: {r.FixedVersion}");
+            AppendTab6("  状态: 已包含安全补丁，无需修复。");
+        }
+        AppendTab6("");
+    }
+
+    // ================== 修复 ==================
+
+    private async void DoVulRepair()
+    {
+        if (_vulLastResult == null || !_vulLastResult.IsVulnerable) { SetStatus("无需修复", false); return; }
+        var ssh = Ssh;
+        var sftp = Sftp;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (sftp == null || !sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
+
+        var patchFile = _vulLastResult.PatchFile;
+        if (string.IsNullOrEmpty(patchFile))
+        {
+            SetStatus("补丁目录中没有 .deb 文件", false);
+            AppendTab6($"\n[修复失败] 补丁目录中没有找到 .deb 文件");
+            AppendTab6($"  目录: {VulPatchDir}");
+            AppendTab6("请将官方安全补丁 (.deb) 放入 plugins/Security patch/ 目录后重试。");
+            return;
+        }
+
+        var localPath = Path.Combine(VulPatchDir, patchFile);
+        if (!File.Exists(localPath))
+        {
+            var available = GetAvailableVulPatches();
+            SetStatus($"补丁文件缺失: {patchFile}", false);
+            AppendTab6($"\n[修复失败] 补丁文件不存在: {localPath}");
+            AppendTab6($"  目录中可用文件: {(available.Count > 0 ? string.Join(", ", available) : "无")}");
+            AppendTab6("请将官方安全补丁 (.deb) 放入 plugins/Security patch/ 目录后重试。");
+            return;
+        }
+
+        _vulRepairBtn.IsEnabled = false;
+        _vulScanBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus("正在修复...", true);
+        AppendTab6("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab6($"[{DateTime.Now:HH:mm:ss}] 开始修复...");
+
+        try
+        {
+            var username = UserBox.Text.Trim();
+            if (string.IsNullOrEmpty(username)) username = "root";
+            var password = PassBox.Password;
+            await Task.Run(() => RepairVulInternal(ssh, sftp, patchFile, localPath, username, password));
+            AppendTab6("\n[修复完成] 补丁安装成功！");
+            AppendTab6("请点击 [验证] 确认修复是否生效。");
+            _vulRepairBtn.IsEnabled = false;
+            _vulVerifyBtn.IsEnabled = true;
+            SetStatus("修复完成", true);
+            MessageBox.Show($"漏洞已修复！\n\nkylin-offline-upgrade 已升级到安全版本。\n请点击 [验证] 确认修复效果。",
+                "修复成功", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            AppendTab6($"\n[修复失败] {ex.Message}");
+            SetStatus($"修复失败: {ex.Message}", false);
+            _vulRepairBtn.IsEnabled = true;
+        }
+        finally { _vulScanBtn.IsEnabled = Ssh != null; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private void RepairVulInternal(SshClient ssh, SftpClient sftp, string patchFile, string localPath, string username, string password)
+    {
+        var remotePath = $"/home/{username}/{patchFile}";
+
+        Dispatcher.Invoke(() => AppendTab6($"[步骤1/2] 上传补丁文件..."));
+        Dispatcher.Invoke(() => AppendTab6($"  本地: {localPath}"));
+        Dispatcher.Invoke(() => AppendTab6($"  远程: {remotePath}"));
+
+        if (sftp == null || !sftp.IsConnected) throw new InvalidOperationException("SFTP 未连接");
+        using (var stream = File.OpenRead(localPath))
+        {
+            sftp.UploadFile(stream, remotePath, true);
+        }
+        Dispatcher.Invoke(() => AppendTab6("  上传完成。\n"));
+
+        Dispatcher.Invoke(() => AppendTab6($"[步骤2/2] 安装补丁..."));
+        string installCmd;
+        if (username == "root")
+        {
+            installCmd = $"cd /home/{username} && dpkg -i {patchFile}";
+        }
+        else
+        {
+            var escapedPassword = password.Replace("'", "'\\''");
+            installCmd = $"cd /home/{username} && echo '{escapedPassword}' | sudo -S dpkg -i {patchFile}";
+        }
+
+        Dispatcher.Invoke(() => AppendTab6($"  $ cd /home/{username} && sudo dpkg -i {patchFile}"));
+        var output = RunCommand(ssh, installCmd);
+        Dispatcher.Invoke(() => AppendTab6(output));
+
+        if (!output.Contains("Setting up") && !output.Contains("正在设置") && !output.Contains("Unpacking"))
+            throw new Exception("安装可能未成功，输出中未找到安装确认关键字。\n请确认用户具有 sudo 权限且密码正确。");
+
+        Dispatcher.Invoke(() => AppendTab6("  安装完成。\n"));
+        try { RunCommand(ssh, $"rm -f {remotePath}"); } catch { }
+    }
+
+    // ================== 验证 ==================
+
+    private async void DoVulVerify()
+    {
+        _vulVerifyBtn.IsEnabled = false;
+        SetStatus("正在验证...", true);
+        AppendTab6("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab6($"[{DateTime.Now:HH:mm:ss}] 开始验证修复结果...");
+
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        DisconnectBtn.IsEnabled = false;
+
+        try
+        {
+            var result = await Task.Run(() => ScanVulInternal(ssh));
+            _vulLastResult = result;
+
+            if (result.Status == VulnerabilityStatus.Fixed || result.Status == VulnerabilityStatus.NotInstalled)
+            {
+                AppendTab6("[验证通过] 漏洞已成功修复！");
+                AppendTab6($"  当前版本: {result.CurrentVersion ?? "未安装"}");
+                AppendTab6($"  修复版本: {result.FixedVersion}");
+                _vulRepairBtn.IsEnabled = false;
+                SetStatus("验证通过", true);
+            }
+            else if (result.IsVulnerable)
+            {
+                AppendTab6("[验证失败] 修复未生效，版本仍为: " + result.CurrentVersion);
+                _vulRepairBtn.IsEnabled = true;
+                SetStatus("验证失败", false);
+            }
+            else
+            {
+                AppendTab6("[验证异常] 无法确定修复状态");
+                SetStatus("验证异常", false);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendTab6($"验证失败: {ex.Message}");
+            SetStatus($"验证失败: {ex.Message}", false);
+        }
+        finally { _vulVerifyBtn.IsEnabled = true; _vulScanBtn.IsEnabled = Ssh != null; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private static string? ParseVulDpkgVersion(string dpkgOutput)
+    {
+        if (string.IsNullOrWhiteSpace(dpkgOutput)) return null;
+        if (dpkgOutput.Contains("no packages found")) return null;
+        foreach (var line in dpkgOutput.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("ii ") || trimmed.StartsWith("hi "))
+            {
+                var parts = trimmed.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 3 && parts[1] == "kylin-offline-upgrade")
+                    return parts[2];
+            }
+        }
+        return null;
+    }
+
+    #endregion
+
+    #region Tab7: 系统优化逻辑（服务/进程/定时任务）
+
+    // ================== 选择操作 ==================
+
+    private void OptSelectAll() { foreach (var item in _optItems) item.IsSelected = true; RefreshOptGrid(); }
+    private void OptSelectNone() { foreach (var item in _optItems) item.IsSelected = false; RefreshOptGrid(); }
+    private void OptInvertSelection() { foreach (var item in _optItems) item.IsSelected = !item.IsSelected; RefreshOptGrid(); }
+
+    private void RefreshOptGrid()
+    {
+        _optDataGrid.Items.Refresh();
+        UpdateTab7Buttons();
+    }
+
+    // ================== 扫描 ==================
+
+    private async void DoOptScan()
+    {
+        _optScanBtn.IsEnabled = false;
+        SetStatus("正在扫描...", true);
+        AppendTab7("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab7($"[{DateTime.Now:HH:mm:ss}] 开始扫描 {_optItems.Count} 项优化项...");
+
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); _optScanBtn.IsEnabled = false; return; }
+        DisconnectBtn.IsEnabled = false;
+
+        // 获取系统信息
+        try
+        {
+            var osRelease = await Task.Run(() => RunCommand(ssh, "cat /etc/os-release"));
+            var osName = ExtractField(osRelease, "PRETTY_NAME");
+            Dispatcher.Invoke(() => _optSystemInfoText.Text = $"目标系统: {osName}");
+        }
+        catch { }
+
+        try
+        {
+            var username = UserBox.Text.Trim();
+            if (string.IsNullOrEmpty(username)) username = "root";
+            var password = PassBox.Password;
+
+            await Task.Run(() =>
+            {
+                foreach (var item in _optItems)
+                {
+                    try
+                    {
+                        var output = RunCommand(ssh, item.ScanCmd);
+                        item.ScanDetail = DescribeOptScan(item, output);
+                        item.Status = EvaluateOptScanResult(item, output);
+                        item.IsApplicable = item.Status == "可优化";
+                        if (item.Status == "不适用") item.IsSelected = false;
+                        Dispatcher.Invoke(() => RefreshOptGrid());
+                        Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name} → {item.Status}"));
+                    }
+                    catch (Exception ex)
+                    {
+                        item.Status = "扫描失败";
+                        item.ScanDetail = ex.Message;
+                        Dispatcher.Invoke(() => RefreshOptGrid());
+                        Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name} → 扫描失败: {ex.Message}"));
+                    }
+                }
+            });
+
+            UpdateOptSummary();
+            var optimizable = _optItems.Count(i => i.Status == "可优化");
+            var optimized = _optItems.Count(i => i.Status.StartsWith("已优化"));
+            _optOptimizeBtn.IsEnabled = optimizable > 0 && _optItems.Any(i => i.IsSelected && i.Status == "可优化");
+            _optVerifyBtn.IsEnabled = true;
+            if (optimizable > 0)
+                SetStatus($"可优化 — {optimizable} 项待处理", false);    // false=红色
+            else if (optimized > 0)
+                SetStatus($"已优化 — {optimized} 项已完成", true);        // true=绿色
+            else
+                SetStatus("无待优化项", true);
+        }
+        catch (Exception ex)
+        {
+            AppendTab7($"扫描失败: {ex.Message}");
+            SetStatus($"扫描失败: {ex.Message}", false);
+        }
+        finally { _optScanBtn.IsEnabled = Ssh != null && Ssh.IsConnected; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    // ================== 标签行协议解析 ==================
+    // 远程命令输出统一为 key=value 标签行：active.<unit> / enabled.<unit> / file.<path> / EXIT_CODE。
+    // 逐行解析替代旧版整串 Contains 匹配，杜绝 "inactive" 含子串 "active" 等误判。
+
+    /// <summary>判断 is-enabled 标签值是否为"单元不存在"</summary>
+    private static bool IsOptNotFound(string value) =>
+        value.Contains("No such file or directory")
+        || value.Contains("Failed to get unit file state")
+        || value.Contains("not-found");
+
+    /// <summary>单元运行中（is-active = active）</summary>
+    private static bool IsOptActiveValue(string value) => value == "active";
+
+    /// <summary>单元开机自启未关（is-enabled = enabled / enabled-runtime）</summary>
+    private static bool IsOptEnabledValue(string value) => value is "enabled" or "enabled-runtime";
+
+    /// <summary>解析远程输出中的 key=value 标签行</summary>
+    private static Dictionary<string, string> ParseOptLabels(string output)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            var eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            var key = line[..eq].Trim();
+            if (key.Length == 0) continue;
+            labels[key] = line[(eq + 1)..].Trim();
+        }
+        return labels;
+    }
+
+    /// <summary>提取 EXIT_CODE 标签值（无则返回 null）</summary>
+    private static int? ExtractOptExitCode(string output)
+    {
+        foreach (var raw in output.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith("EXIT_CODE=") && int.TryParse(line["EXIT_CODE=".Length..].Trim(), out var code))
+                return code;
+        }
+        return null;
+    }
+
+    /// <summary>生成人类可读的扫描详情（逐项原因说明）</summary>
+    private static string DescribeOptScan(OptimizationItem item, string output)
+    {
+        var labels = ParseOptLabels(output);
+        var notes = new List<string>();
+        foreach (var kv in labels)
+        {
+            if (kv.Key.StartsWith("active."))
+                notes.Add(kv.Value == "active" ? $"{kv.Key["active.".Length..]} 运行中" : $"{kv.Key["active.".Length..]} 未运行");
+            else if (kv.Key.StartsWith("enabled."))
+            {
+                var unit = kv.Key["enabled.".Length..];
+                if (kv.Value == "masked") notes.Add($"{unit} 已mask停用");
+                else if (IsOptNotFound(kv.Value)) notes.Add($"{unit} 不存在");
+                else if (IsOptEnabledValue(kv.Value)) notes.Add($"{unit} 开机自启未关({kv.Value})");
+                else notes.Add($"{unit} 开机自启已关({kv.Value})");
+            }
+            else if (kv.Key.StartsWith("file."))
+            {
+                var path = kv.Key["file.".Length..];
+                var name = Path.GetFileName(path);
+                notes.Add(kv.Value switch { "EXECUTABLE" => $"{name} 可执行", "NOT_FOUND" => $"{name} 不存在", _ => $"{name} 不可执行" });
+            }
+            else if (kv.Key.StartsWith("desktop."))
+            {
+                if (kv.Value == "ENABLED") notes.Add($"自启动项 {kv.Key["desktop.".Length..]} 未禁用");
+                else if (kv.Value == "DISABLED") notes.Add($"自启动项 {kv.Key["desktop.".Length..]} 已禁用");
+            }
+            else if (kv.Key.StartsWith("dbus."))
+            {
+                if (kv.Value == "ENABLED") notes.Add($"dbus激活 {kv.Key["dbus.".Length..]} 未禁用");
+                else if (kv.Value == "DISABLED") notes.Add($"dbus激活 {kv.Key["dbus.".Length..]} 已禁用");
+            }
+            else if (kv.Key.StartsWith("proc."))
+            {
+                notes.Add(kv.Value == "RUNNING" ? $"残留进程 {kv.Key["proc.".Length..]} 运行中" : $"残留进程 {kv.Key["proc.".Length..]} 未运行");
+            }
+        }
+        return notes.Count > 0 ? string.Join("; ", notes) : output.Trim();
+    }
+
+    /// <summary>若输出中任一 enabled 标签为 masked，标记该项为 mask 停用</summary>
+    private static void MarkOptMasked(OptimizationItem item, string output)
+    {
+        var labels = ParseOptLabels(output);
+        var masked = labels.Any(kv => kv.Key.StartsWith("enabled.") && kv.Value == "masked");
+        item.IsMasked = masked;
+        if (masked && item.Status == "已优化") item.Status = "已优化(mask)";
+    }
+
+    private static string EvaluateOptScanResult(OptimizationItem item, string output)
+    {
+        var labels = ParseOptLabels(output);
+        if (labels.Count == 0) return "扫描失败";
+
+        // chmod 类 — file.<path>=EXECUTABLE / NOT_EXECUTABLE / NOT_FOUND
+        if (item.Category == "chmod")
+        {
+            var fileLabels = labels.Where(kv => kv.Key.StartsWith("file.")).ToList();
+            if (fileLabels.Count == 0) return "扫描失败";
+            if (fileLabels.Any(kv => kv.Value == "EXECUTABLE")) return "可优化";
+            return fileLabels.All(kv => kv.Value == "NOT_FOUND") ? "不适用" : "已优化";
+        }
+
+        // autostart 类 — 四维度：可执行位(file.*) + XDG自启动(desktop.*) + dbus激活(dbus.*) + 残留进程(proc.*)
+        // 任一项未禁用即"可优化"；全部达标才"已优化"（不做不适用判定：非麒麟桌面全部不存在与已优化同表现，均无需操作）
+        if (item.Category == "autostart")
+        {
+            var fileLabels = labels.Where(kv => kv.Key.StartsWith("file.")).ToList();
+            var desktopLabels = labels.Where(kv => kv.Key.StartsWith("desktop.")).ToList();
+            var dbusLabels = labels.Where(kv => kv.Key.StartsWith("dbus.")).ToList();
+            var procLabels = labels.Where(kv => kv.Key.StartsWith("proc.")).ToList();
+            if (fileLabels.Count == 0 && desktopLabels.Count == 0 && dbusLabels.Count == 0 && procLabels.Count == 0) return "扫描失败";
+            if (fileLabels.Any(kv => kv.Value == "EXECUTABLE")) return "可优化";
+            if (desktopLabels.Any(kv => kv.Value == "ENABLED")) return "可优化";
+            if (dbusLabels.Any(kv => kv.Value == "ENABLED")) return "可优化";
+            if (procLabels.Any(kv => kv.Value == "RUNNING")) return "可优化";
+            return "已优化";
+        }
+
+        // systemctl 类 — 双维度判定：运行状态(active.*) + 开机自启(enabled.*)
+        // 任一维度未达标（仍在运行 / 开机自启未关）即"可优化"；两者均达标才"已优化"
+        var activeLabels = labels.Where(kv => kv.Key.StartsWith("active.")).ToList();
+        var enabledLabels = labels.Where(kv => kv.Key.StartsWith("enabled.")).ToList();
+
+        // 全部单元均不存在 → 不适用
+        if (enabledLabels.Count > 0 && enabledLabels.All(kv => IsOptNotFound(kv.Value)) && !activeLabels.Any(kv => IsOptActiveValue(kv.Value)))
+            return "不适用";
+
+        if (activeLabels.Any(kv => IsOptActiveValue(kv.Value))) return "可优化";     // 仍有服务在运行
+        if (enabledLabels.Any(kv => IsOptEnabledValue(kv.Value))) return "可优化";   // 仍开机自启
+
+        return "已优化";
+    }
+
+    private void UpdateOptSummary()
+    {
+        var optimizable = _optItems.Count(i => i.Status == "可优化");
+        var optimized = _optItems.Count(i => i.Status.StartsWith("已优化"));
+        var na = _optItems.Count(i => i.Status == "不适用");
+        _optInfoText.Text = $"优化项数量: {_optItems.Count} 项 (可优化: {optimizable}, 已优化: {optimized}, 不适用: {na})";
+    }
+
+    // ================== 优化 ==================
+
+    private async void DoOptOptimize()
+    {
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+
+        var selected = _optItems.Where(i => i.IsSelected && i.Status == "可优化" && !string.IsNullOrEmpty(i.OptimizeCmd)).ToList();
+        if (selected.Count == 0) { SetStatus("没有选中可优化的项", false); return; }
+
+        _optOptimizeBtn.IsEnabled = false;
+        _optScanBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus($"正在优化 {selected.Count} 项...", true);
+        AppendTab7("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab7($"[{DateTime.Now:HH:mm:ss}] 开始优化 {selected.Count} 项...");
+
+        var username = UserBox.Text.Trim();
+        if (string.IsNullOrEmpty(username)) username = "root";
+        var password = PassBox.Password;
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var item in selected)
+                {
+                    Dispatcher.Invoke(() => { item.Status = "优化中"; RefreshOptGrid(); });
+                    Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name}..."));
+                    Dispatcher.Invoke(() => AppendTab7($"    命令: {item.OptimizeCmd}"));
+
+                    try
+                    {
+                        var cmd = RunCommandSudo(ssh, item.OptimizeCmd, username, password);
+                        if (!string.IsNullOrWhiteSpace(cmd))
+                            Dispatcher.Invoke(() => AppendTab7($"    输出: {cmd.Trim()}"));
+                        var exitCode = ExtractOptExitCode(cmd);
+                        if (exitCode != null && exitCode != 0)
+                            Dispatcher.Invoke(() => AppendTab7($"    警告: 停用命令退出码 {exitCode}（部分单元可能不存在，以验证为准）"));
+                        // 立即验证（双维度：运行状态 + 开机自启）
+                        if (!string.IsNullOrEmpty(item.VerifyCmd))
+                        {
+                            Thread.Sleep(500); // 等待服务完全停止
+                            var verifyOutput = RunCommand(ssh, item.VerifyCmd);
+                            item.Status = EvaluateOptVerifyResult(item, verifyOutput);
+                            MarkOptMasked(item, verifyOutput);
+                            Dispatcher.Invoke(() => AppendTab7($"    验证: {verifyOutput.Trim()}"));
+                            Dispatcher.Invoke(() => AppendTab7($"    → {item.Status}"));
+                        }
+                        else
+                        {
+                            item.Status = "已优化";
+                            Dispatcher.Invoke(() => AppendTab7($"    → {item.Status}"));
+                        }
+                        item.IsOptimized = item.Status.StartsWith("已优化");
+                    }
+                    catch (Exception ex)
+                    {
+                        item.Status = "失败";
+                        item.ScanDetail = ex.Message;
+                        Dispatcher.Invoke(() => AppendTab7($"    → 失败: {ex.Message}"));
+                    }
+                    Dispatcher.Invoke(() => RefreshOptGrid());
+                }
+            });
+
+            UpdateOptSummary();
+            SetStatus("优化完成", true);
+        }
+        catch (Exception ex)
+        {
+            AppendTab7($"优化失败: {ex.Message}");
+            SetStatus($"优化失败: {ex.Message}", false);
+        }
+        finally { _optOptimizeBtn.IsEnabled = true; _optScanBtn.IsEnabled = Ssh != null; _optVerifyBtn.IsEnabled = true; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    private static string EvaluateOptVerifyResult(OptimizationItem item, string output)
+    {
+        var labels = ParseOptLabels(output);
+        if (labels.Count == 0) return "验证异常";
+
+        // chmod 类 — 任一文件仍可执行 → 失败
+        if (item.Category == "chmod")
+            return labels.Any(kv => kv.Key.StartsWith("file.") && kv.Value == "EXECUTABLE") ? "失败" : "已优化";
+
+        // autostart 类 — 任一维度未禁用（可执行/自启动未禁/dbus未禁/进程仍在）→ 失败
+        if (item.Category == "autostart")
+            return labels.Any(kv =>
+                (kv.Key.StartsWith("file.") && kv.Value == "EXECUTABLE")
+                || (kv.Key.StartsWith("desktop.") && kv.Value == "ENABLED")
+                || (kv.Key.StartsWith("dbus.") && kv.Value == "ENABLED")
+                || (kv.Key.StartsWith("proc.") && kv.Value == "RUNNING")) ? "失败" : "已优化";
+
+        // systemctl 类 — 双维度：仍在运行 或 仍开机自启 → 失败
+        bool stillRunning = labels.Any(kv => kv.Key.StartsWith("active.") && IsOptActiveValue(kv.Value));
+        bool stillEnabled = labels.Any(kv => kv.Key.StartsWith("enabled.") && IsOptEnabledValue(kv.Value));
+        return stillRunning || stillEnabled ? "失败" : "已优化";
+    }
+
+    // ================== 验证 ==================
+
+    private async void DoOptVerify()
+    {
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+
+        _optVerifyBtn.IsEnabled = false;
+        _optScanBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus("正在验证...", true);
+        AppendTab7("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab7($"[{DateTime.Now:HH:mm:ss}] 开始逐项验证...");
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var item in _optItems)
+                {
+                    if (item.Status == "不适用" || item.Status == "待扫描") continue;
+
+                    try
+                    {
+                        // 验证 = 重新扫描：所有项 ScanCmd 与 VerifyCmd 一致，统一走扫描判定（可优化/已优化/不适用）
+                        var output = RunCommand(ssh, item.ScanCmd);
+                        item.ScanDetail = DescribeOptScan(item, output);
+                        item.Status = EvaluateOptScanResult(item, output);
+                        item.IsApplicable = item.Status == "可优化";
+                        if (item.Status == "不适用") item.IsSelected = false;
+                        MarkOptMasked(item, output);
+                        Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name} → {item.Status}"));
+                    }
+                    catch (Exception ex)
+                    {
+                        item.Status = "验证失败";
+                        Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name} → 验证失败: {ex.Message}"));
+                    }
+                    Dispatcher.Invoke(() => RefreshOptGrid());
+                }
+            });
+
+            UpdateOptSummary();
+            SetStatus("验证完成", true);
+        }
+        catch (Exception ex)
+        {
+            AppendTab7($"验证失败: {ex.Message}");
+            SetStatus($"验证失败: {ex.Message}", false);
+        }
+        finally { _optVerifyBtn.IsEnabled = true; _optScanBtn.IsEnabled = Ssh != null; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    // ================== 恢复 ==================
+
+    private async void DoOptRestore()
+    {
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+
+        var selected = _optItems.Where(i => i.IsSelected && !string.IsNullOrEmpty(i.RestoreCmd)).ToList();
+        if (selected.Count == 0) { SetStatus("没有选中可恢复的项", false); return; }
+
+        _optRestoreBtn.IsEnabled = false;
+        _optScanBtn.IsEnabled = false;
+        DisconnectBtn.IsEnabled = false;
+        SetStatus($"正在恢复 {selected.Count} 项...", true);
+        AppendTab7("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        AppendTab7($"[{DateTime.Now:HH:mm:ss}] 开始恢复 {selected.Count} 项...");
+
+        var username = UserBox.Text.Trim();
+        if (string.IsNullOrEmpty(username)) username = "root";
+        var password = PassBox.Password;
+
+        try
+        {
+            await Task.Run(() =>
+            {
+                foreach (var item in selected)
+                {
+                    Dispatcher.Invoke(() => { item.Status = "恢复中"; RefreshOptGrid(); });
+                    Dispatcher.Invoke(() => AppendTab7($"  [{item.Id}] {item.Name}..."));
+                    Dispatcher.Invoke(() => AppendTab7($"    命令: {item.RestoreCmd}"));
+
+                    try
+                    {
+                        var cmd = RunCommandSudo(ssh, item.RestoreCmd, username, password);
+                        if (!string.IsNullOrWhiteSpace(cmd))
+                            Dispatcher.Invoke(() => AppendTab7($"    输出: {cmd.Trim()}"));
+                        Thread.Sleep(300);
+                        var scanOutput = RunCommand(ssh, item.ScanCmd);
+                        item.ScanDetail = DescribeOptScan(item, scanOutput);
+                        item.Status = EvaluateOptScanResult(item, scanOutput);
+                        item.IsApplicable = item.Status == "可优化";
+                        item.IsMasked = false;
+                        Dispatcher.Invoke(() => AppendTab7($"    恢复后状态: {item.Status}"));
+                    }
+                    catch (Exception ex)
+                    {
+                        item.Status = "失败";
+                        item.ScanDetail = ex.Message;
+                        Dispatcher.Invoke(() => AppendTab7($"    → 失败: {ex.Message}"));
+                    }
+                    Dispatcher.Invoke(() => RefreshOptGrid());
+                }
+            });
+
+            UpdateOptSummary();
+            SetStatus("恢复完成", true);
+        }
+        catch (Exception ex)
+        {
+            AppendTab7($"恢复失败: {ex.Message}");
+            SetStatus($"恢复失败: {ex.Message}", false);
+        }
+        finally { _optRestoreBtn.IsEnabled = Ssh != null; _optScanBtn.IsEnabled = Ssh != null; DisconnectBtn.IsEnabled = Ssh != null; }
+    }
+
+    // ================== 状态列颜色转换器 ==================
+
+    private class OptStatusColorConverter : System.Windows.Data.IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            var text = value?.ToString() ?? "";
+            if (text.StartsWith("已优化")) return new SolidColorBrush(Color.FromRgb(0, 150, 0));
+            return text switch
+            {
+                "未扫描" or "待扫描" => Brushes.Gray,
+                "可优化" or "优化中" or "恢复中" => new SolidColorBrush(Color.FromRgb(220, 50, 50)),
+                "失败" or "扫描失败" or "验证失败" => new SolidColorBrush(Color.FromRgb(200, 80, 80)),
+                "不适用" => Brushes.Gray,
+                _ => Brushes.Gray
+            };
+        }
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => throw new NotImplementedException();
+    }
+
+    #endregion
+
+    #region Tab7: 14 项优化定义与命令构造器
+    // 命令协议：扫描/验证输出统一为 key=value 标签行（active.<unit> / enabled.<unit> / file.<path> / EXIT_CODE），
+    // 由 ParseOptLabels 逐行解析，杜绝整串 Contains 子串误判（如 "inactive" 含 "active"）。
+    // 停用 = disable --now（立即停用）+ mask（永久屏蔽，防系统更新/依赖拉起复活）；恢复 = unmask + enable。
+    // 多命令序列用 sh -c '...' 包裹，确保 ; 后续命令同样以 root 执行（sudo -S 只作用于第一个命令）。
+
+    /// <summary>生成 is-active 标签命令（stderr 丢弃，值仅 active/inactive/failed 等）</summary>
+    private static string OptAct(string unit) =>
+        $"echo \"active.{unit}=$(systemctl is-active {unit} 2>/dev/null)\"";
+
+    /// <summary>生成 is-enabled 标签命令（stderr 合并，值含 not-found 信息）</summary>
+    private static string OptEn(string unit) =>
+        $"echo \"enabled.{unit}=$(systemctl is-enabled {unit} 2>&1)\"";
+
+    /// <summary>扫描命令：每个单元输出 active/enabled 两个标签</summary>
+    private static string OptSysScan(params string[] units) =>
+        string.Join("; ", units.SelectMany(u => new[] { OptAct(u), OptEn(u) }));
+
+    /// <summary>停用命令：disable --now 后 mask，并捕获退出码（整体以 root 执行）</summary>
+    private static string OptMaskCmd(params string[] units) =>
+        $"sh -c 'systemctl disable --now {string.Join(' ', units)} 2>&1; systemctl mask {string.Join(' ', units)} 2>&1; echo EXIT_CODE=$?'";
+
+    /// <summary>恢复命令：unmask 后 enable，并捕获退出码（整体以 root 执行）</summary>
+    private static string OptUnmaskCmd(params string[] units) =>
+        $"sh -c 'systemctl unmask {string.Join(' ', units)} 2>&1; systemctl enable {string.Join(' ', units)} 2>&1; echo EXIT_CODE=$?'";
+
+    /// <summary>chmod 类扫描命令：file.<path>=EXECUTABLE / NOT_EXECUTABLE / NOT_FOUND</summary>
+    private static string OptFileScan(params string[] paths) =>
+        string.Join("; ", paths.Select(p =>
+            $"if [ -e \"{p}\" ]; then if [ -x \"{p}\" ]; then echo \"file.{p}=EXECUTABLE\"; else echo \"file.{p}=NOT_EXECUTABLE\"; fi; else echo \"file.{p}=NOT_FOUND\"; fi"));
+
+    /// <summary>chmod 类变更命令：mode 为 -x（停用）或 +x（恢复），整体以 root 执行</summary>
+    private static string OptChmodCmd(string mode, params string[] paths) =>
+        $"sh -c 'chmod {mode} {string.Join(' ', paths.Select(p => $"\"{p}\""))} 2>&1; echo EXIT_CODE=$?'";
+
+    // ================== autostart 类（会话自启动清理）命令构造 ==================
+    // 会话残留进程由 XDG 自启动(.desktop) / dbus 激活(.service) / 直接可执行位拉起，不经 systemd，mask 无法阻断。
+    // 关闭手段三合一：pkill 结束残留进程 + chmod -x 去可执行位(ELF) + .desktop/.service 改名禁用(脚本类唯一有效手段)。
+    // pgrep/pkill 模式用 [x]yyy 正则 + ^锚定行首，避免匹配到扫描命令自身（命令行含相同字符串）。
+
+    /// <summary>XDG 自启动扫描：desktop.<name>=ENABLED / DISABLED / NOT_FOUND（.disabled 后缀为已禁用标记）</summary>
+    private static string OptDesktopScan(params string[] names) =>
+        string.Join("; ", names.Select(n =>
+            $"if [ -e /etc/xdg/autostart/{n}.desktop ]; then echo \"desktop.{n}=ENABLED\"; elif [ -e /etc/xdg/autostart/{n}.desktop.disabled ]; then echo \"desktop.{n}=DISABLED\"; else echo \"desktop.{n}=NOT_FOUND\"; fi"));
+
+    /// <summary>dbus 激活文件扫描：dbus.<name>=ENABLED / DISABLED / NOT_FOUND</summary>
+    private static string OptDbusScan(params string[] names) =>
+        string.Join("; ", names.Select(n =>
+            $"if [ -e /usr/share/dbus-1/system-services/{n}.service ]; then echo \"dbus.{n}=ENABLED\"; elif [ -e /usr/share/dbus-1/system-services/{n}.service.disabled ]; then echo \"dbus.{n}=DISABLED\"; else echo \"dbus.{n}=NOT_FOUND\"; fi"));
+
+    /// <summary>残留进程扫描：proc.<key>=RUNNING / STOPPED（Pattern 为 ^ 锚定正则，如 ^/usr/bin/[u]kui-bluetooth）</summary>
+    private static string OptProcScan(params (string Key, string Pattern)[] procs) =>
+        string.Join("; ", procs.Select(p =>
+            $"echo \"proc.{p.Key}=$(pgrep -f '{p.Pattern}' >/dev/null 2>&1 && echo RUNNING || echo STOPPED)\""));
+
+    /// <summary>autostart 类停用命令：pkill 残留进程 + chmod -x + 禁用 .desktop 与 dbus .service（整体 root 执行）</summary>
+    private static string OptAutoDisableCmd(string[] files, string[] desktops, string[] dbus, (string Key, string Pattern)[] procs)
+    {
+        var parts = new List<string>();
+        foreach (var p in procs) parts.Add($"pkill -f \"{p.Pattern}\" 2>/dev/null");
+        parts.Add($"chmod -x {string.Join(' ', files.Select(f => $"\"{f}\""))} 2>/dev/null");
+        parts.Add($"for d in {string.Join(' ', desktops)}; do [ -e /etc/xdg/autostart/$d.desktop ] && mv /etc/xdg/autostart/$d.desktop /etc/xdg/autostart/$d.desktop.disabled 2>/dev/null || true; done");
+        parts.Add($"for s in {string.Join(' ', dbus)}; do [ -e /usr/share/dbus-1/system-services/$s.service ] && mv /usr/share/dbus-1/system-services/$s.service /usr/share/dbus-1/system-services/$s.service.disabled 2>/dev/null || true; done");
+        parts.Add("echo EXIT_CODE=$?");
+        return $"sh -c '{string.Join("; ", parts)}'";
+    }
+
+    /// <summary>autostart 类恢复命令：chmod +x + 还原 .desktop 与 dbus .service（重新登录后进程自动恢复）</summary>
+    private static string OptAutoEnableCmd(string[] files, string[] desktops, string[] dbus)
+    {
+        var parts = new List<string>();
+        parts.Add($"chmod +x {string.Join(' ', files.Select(f => $"\"{f}\""))} 2>/dev/null");
+        parts.Add($"for d in {string.Join(' ', desktops)}; do [ -e /etc/xdg/autostart/$d.desktop.disabled ] && mv /etc/xdg/autostart/$d.desktop.disabled /etc/xdg/autostart/$d.desktop 2>/dev/null || true; done");
+        parts.Add($"for s in {string.Join(' ', dbus)}; do [ -e /usr/share/dbus-1/system-services/$s.service.disabled ] && mv /usr/share/dbus-1/system-services/$s.service.disabled /usr/share/dbus-1/system-services/$s.service 2>/dev/null || true; done");
+        parts.Add("echo EXIT_CODE=$?");
+        return $"sh -c '{string.Join("; ", parts)}'";
+    }
+
+    /// <summary>systemctl 类优化项工厂</summary>
+    private static OptimizationItem OptSysItem(int id, string name, string risk, string riskNote, params string[] units) => new()
+    {
+        Id = id, Name = name, RiskLevel = risk, Category = "systemctl",
+        ScanCmd = OptSysScan(units),
+        OptimizeCmd = OptMaskCmd(units),
+        VerifyCmd = OptSysScan(units),
+        RestoreCmd = OptUnmaskCmd(units),
+        RiskNote = riskNote
+    };
+
+    /// <summary>chmod 类优化项工厂</summary>
+    private static OptimizationItem OptChmodItem(int id, string name, string risk, string riskNote, params string[] paths) => new()
+    {
+        Id = id, Name = name, RiskLevel = risk, Category = "chmod",
+        ScanCmd = OptFileScan(paths),
+        OptimizeCmd = OptChmodCmd("-x", paths),
+        VerifyCmd = OptFileScan(paths),
+        RestoreCmd = OptChmodCmd("+x", paths),
+        RiskNote = riskNote
+    };
+
+    /// <summary>autostart 类（会话自启动清理）优化项工厂：files=去可执行位的 ELF 二进制；
+    /// desktops=禁用的 XDG 自启动项名（不含 .desktop 后缀）；dbus=禁用的 dbus 激活服务名（不含 .service 后缀）；
+    /// procs=残留进程探测/清理的 ^ 锚定正则（Key 为标签名，Pattern 为 pgrep/pkill 模式）</summary>
+    private static OptimizationItem OptAutoItem(int id, string name, string risk, string riskNote,
+        string[] files, string[] desktops, string[] dbus, (string Key, string Pattern)[] procs) => new()
+    {
+        Id = id, Name = name, RiskLevel = risk, Category = "autostart",
+        ScanCmd = string.Join("; ", new[] { OptFileScan(files), OptDesktopScan(desktops), OptDbusScan(dbus), OptProcScan(procs) }),
+        OptimizeCmd = OptAutoDisableCmd(files, desktops, dbus, procs),
+        VerifyCmd = string.Join("; ", new[] { OptFileScan(files), OptDesktopScan(desktops), OptDbusScan(dbus), OptProcScan(procs) }),
+        RestoreCmd = OptAutoEnableCmd(files, desktops, dbus),
+        RiskNote = riskNote
+    };
+
+    private static List<OptimizationItem> GetOptimizationItems() => new()
+    {
+        OptSysItem(1, "关闭蓝牙、打印机、生物识别全套服务", "低",
+            "服务器场景通常不需要蓝牙/打印/生物识别",
+            "bluetooth.service", "cups.service", "cups.socket", "cups.path", "cups-browsed.service", "biometric-authentication.service", "ukui-bluetooth.service"),
+        OptChmodItem(2, "关闭麒麟管家后台进程", "中",
+            "麒麟管家是桌面环境组件，纯服务器场景可关闭",
+            "/usr/bin/kylin-os-manager-daemon",
+            "/usr/share/kylin-os-manager/kylin-core-dump-monitor/kylin-core-dump-monitor.sh",
+            "/usr/lib/kylin-os-manager/bin/kylin-os-manager-session-service"),
+        OptSysItem(3, "关闭麒麟管家系统服务", "中",
+            "麒麟管家的 systemd 服务单元，与后台进程配套关闭；纯服务器场景建议关闭",
+            "kylin-core-dump-monitor.service", "kylin-process-manager-daemon.service", "com.kylin.kysdk.SyncConfig.service", "com.kylin-os-manager.service"),
+        OptSysItem(4, "关闭系统激活校验服务", "低",
+            "关闭后跳过系统激活校验，不影响日常使用",
+            "kylin-activation-check.service"),
+        OptSysItem(5, "关闭定时更新服务", "中",
+            "关闭后将不再自动下载和安装系统更新，需手动维护",
+            "kylin-source-update.service", "kylin-source-update-timer.service", "kylin-source-update-timer.timer", "kylin-system-updater.service", "kylin-offline-upgrade.service", "kylin-unattended-upgrades.service"),
+        OptSysItem(6, "关闭安全审计日志服务(auditd)", "低",
+            "关闭后 /var/log/audit/ 不再增长，但失去审计追踪能力",
+            "auditd.service"),
+        OptSysItem(7, "关闭 Samba 服务", "低",
+            "不需要 Windows 文件共享的场景可关闭",
+            "smbd.service", "nmbd.service"),
+        OptSysItem(8, "关闭 pppd-dns 服务", "低",
+            "PPP 拨号 DNS 更新服务，不使用拨号网络即可关闭",
+            "pppd-dns.service"),
+        OptSysItem(9, "关闭局域网自动发现服务(avahi-daemon)", "低",
+            "mDNS/Zeroconf 服务发现协议，服务器场景通常不需要",
+            "avahi-daemon.service", "avahi-daemon.socket"),
+        OptChmodItem(10, "关闭天气服务(kylin-weather)", "低",
+            "天气小部件为桌面附加组件，关闭后不再显示天气并释放约 0.8% 内存（进程内存排行第 3）；重启后生效",
+            "/usr/bin/kylin-weather"),
+        OptSysItem(11, "关闭磁盘、存储冗余监控服务(LVM)", "中",
+            "未使用 LVM 逻辑卷管理的系统可关闭；使用 LVM 的系统建议保留",
+            "lvm2-monitor.service", "lvm2-lvmpolld.service", "lvm2-lvmpolld.socket"),
+        OptSysItem(12, "关闭多账户实时监控服务(accounts-daemon)", "中",
+            "mask 后即使手动 systemctl start 也无法启动，纯服务器场景建议关闭",
+            "accounts-daemon.service"),
+        OptChmodItem(13, "关闭系统全局搜索后台(ukui-search)", "低",
+            "UKUI 桌面环境的全局搜索功能，纯命令行服务器不需要",
+            "/usr/bin/ukui-search"),
+        OptAutoItem(14, "清理会话层自启动残留(蓝牙/激活/更新/打印/管家/搜索)", "中",
+            "上述服务虽已 mask，但桌面会话自启动项(XDG autostart / dbus 激活)仍会拉起残留进程；此项禁用自启动入口、去可执行位并结束残留进程，彻底阻断重启复活；恢复后重新登录生效",
+            new[]
+            {
+                "/usr/bin/ukui-bluetooth",
+                "/usr/bin/kylin-activation", "/usr/bin/kylin-activation-renewalcheck", "/usr/bin/kylin-activation-prompt", "/usr/sbin/activation-daemon",
+                "/usr/bin/OfflineUpgradeNotification", "/usr/bin/kylin-background-upgrade",
+                "/usr/bin/kylin-printer-applet", "/usr/bin/kpr-backend",
+                "/usr/bin/kylin-process-manager",
+                "/usr/bin/ukui-search-service", "/usr/bin/ukui-search-app-data-service", "/usr/bin/ukui-search-service-dir-manager", "/usr/bin/ukui-search-systemdbus",
+            },
+            new[]
+            {
+                "ukui-bluetooth",
+                "kylin-activation-autostart", "kylin-activation-prompt-autostart", "kylin-activation-check-deactivate", "kylin-activation-volume",
+                "print-applet", "kylin-printer-applet",
+                "kylin-process-manager",
+                "ukui-search", "ukui-search-service", "ukui-search-app-data-service", "ukui-search-service-dir-manager",
+                "UpgradeMountFailedNotify", "kylin-background-upgrade", "kylin-updatefinish-notify1", "kylin-updateresult-notify", "kylin-updateresult-notify-2303", "kpct-updatefinish-notify", "kylin-reboot-installnotify", "kylin-stepinstall-notify",
+            },
+            new[]
+            {
+                "com.kylin.UpgradeStrategies", "org.kylin.KprBackend", "com.ukui.search.qt.systemdbus",
+            },
+            new (string, string)[]
+            {
+                ("bluetooth", "^/usr/bin/[u]kui-bluetooth"),
+                ("activation", "^/usr/bin/[k]ylin-activation"),
+                ("activationdaemon", "^/usr/sbin/[a]ctivation-daemon"),
+                ("upgradestrategies", "^/usr/bin/python3 /usr/share/[k]ylin-system-updater"),
+                ("kconf2", "^[k]conf2"),
+                ("offlineupgrade", "^/usr/bin/[O]fflineUpgradeNotification"),
+                ("backgroundupgrade", "^/usr/bin/[k]ylin-background-upgrade"),
+                ("printapplet", "^/usr/bin/python3 /usr/share/[s]ystem-config-printer"),
+                ("printerapplet", "^/usr/bin/[k]ylin-printer-applet"),
+                ("kprbackend", "^/usr/bin/[k]pr-backend"),
+                ("procmanager", "^/usr/bin/[k]ylin-process-manager"),
+                ("ukuisearch", "^/usr/bin/[u]kui-search"),
+            }),
+    };
+
+    #endregion
+}
+
+// ================== 整合模型（原 KylinOsScanView / KylinOsOptimizeView）==================
+
+public class VulnerabilityResult
+{
+    public bool IsVulnerable { get; set; }
+    public VulnerabilityStatus Status { get; set; }
+    public string? CurrentVersion { get; set; }
+    public string? FixedVersion { get; set; }
+    public string? PatchFile { get; set; }
+    public string OsName { get; set; } = "";
+    public string OsVersion { get; set; } = "";
+    public string OsSp { get; set; } = "";
+    public string KernelVersion { get; set; } = "";
+    public string Architecture { get; set; } = "";
+    public DateTime ScanTime { get; set; }
+}
+
+public enum VulnerabilityStatus { Unknown, Vulnerable, Fixed, NotInstalled, ScanFailed }
+
+public class OptimizationItem
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string RiskLevel { get; set; } = "低";
+    public string Category { get; set; } = "";
+    public string ScanCmd { get; set; } = "";
+    public string OptimizeCmd { get; set; } = "";
+    public string VerifyCmd { get; set; } = "";
+    public string RestoreCmd { get; set; } = "";
+    public bool IsSelected { get; set; } = true;
+    public string Status { get; set; } = "待扫描";
+    public bool IsApplicable { get; set; } = false;
+    public bool IsOptimized { get; set; } = false;
+    public bool IsMasked { get; set; } = false;
+    public string RiskNote { get; set; } = "";
+    public string ScanDetail { get; set; } = "";
+}
+
+public class DpkgVersion : IComparable<DpkgVersion>
+{
+    public int Epoch { get; set; }
+    public string UpstreamVersion { get; set; } = "";
+    public string DebianRevision { get; set; } = "0";
+
+    public static DpkgVersion Parse(string version)
+    {
+        var v = new DpkgVersion();
+        int colonIdx = version.IndexOf(':');
+        if (colonIdx >= 0)
+        {
+            if (int.TryParse(version.Substring(0, colonIdx), out int ep)) v.Epoch = ep;
+            version = version.Substring(colonIdx + 1);
+        }
+        int dashIdx = version.LastIndexOf('-');
+        if (dashIdx >= 0)
+        {
+            v.DebianRevision = version.Substring(dashIdx + 1);
+            v.UpstreamVersion = version.Substring(0, dashIdx);
+        }
+        else
+        {
+            v.UpstreamVersion = version;
+        }
+        return v;
+    }
+
+    public int CompareTo(DpkgVersion? other)
+    {
+        if (other == null) return 1;
+        if (Epoch != other.Epoch) return Epoch.CompareTo(other.Epoch);
+        int cmp = CompareSegments(UpstreamVersion, other.UpstreamVersion);
+        if (cmp != 0) return cmp;
+        return CompareSegments(DebianRevision, other.DebianRevision);
+    }
+
+    private static int CompareSegments(string a, string b)
+    {
+        var segsA = SplitSegments(a);
+        var segsB = SplitSegments(b);
+        int maxLen = Math.Max(segsA.Count, segsB.Count);
+        for (int i = 0; i < maxLen; i++)
+        {
+            string sa = i < segsA.Count ? segsA[i] : "0";
+            string sb = i < segsB.Count ? segsB[i] : "0";
+            bool na = int.TryParse(sa, out int va);
+            bool nb = int.TryParse(sb, out int vb);
+            if (na && nb) { if (va != vb) return va.CompareTo(vb); }
+            else { int sc = string.Compare(sa, sb, StringComparison.Ordinal); if (sc != 0) return sc; }
+        }
+        return 0;
+    }
+
+    private static List<string> SplitSegments(string s)
+    {
+        var result = new List<string>();
+        var current = new StringBuilder();
+        bool? lastIsDigit = null;
+        foreach (char c in s)
+        {
+            bool isDigit = char.IsDigit(c);
+            if (lastIsDigit.HasValue && isDigit != lastIsDigit.Value)
+            {
+                result.Add(current.ToString());
+                current.Clear();
+            }
+            current.Append(c);
+            lastIsDigit = isDigit;
+        }
+        if (current.Length > 0) result.Add(current.ToString());
+        return result;
     }
 }

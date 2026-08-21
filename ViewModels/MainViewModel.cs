@@ -80,26 +80,10 @@ public partial class MainViewModel : ObservableObject
     {
         foreach (var view in _viewCache.Values)
         {
-            if (view is Views.Remote.VncView vnc)
-                vnc.SafeDisconnect();
-            else if (view is Views.Remote.RdpView rdp)
-                rdp.SafeDisconnect();
-            else if (view is Views.Remote.SshView ssh)
-                ssh.SafeDisconnect();
-            else if (view is Views.Remote.FtpView ftp)
-                ftp.SafeDisconnect();
-            else if (view is Views.Database.MySqlView mysql)
-                mysql.SafeDisconnect();
-            else if (view is Views.Database.OpenGaussView og)
-                og.SafeDisconnect();
-            else if (view is Views.Serial.SerialDebugView serial)
+            if (view is Views.Serial.SerialDebugView serial)
                 serial.SafeDisconnect();
             else if (view is Views.Serial.EarlyWarningModbusView modbus)
                 modbus.SafeDisconnect();
-            else if (view is Views.Security.KylinOsScanView kylin)
-                kylin.SafeDisconnect();
-            else if (view is Views.Security.KylinOsOptimizeView kylinOpt)
-                kylinOpt.SafeDisconnect();
             else if (view is Views.Security.KylinOsDeployView kylinDeploy)
                 kylinDeploy.SafeDisconnect();
         }
@@ -131,44 +115,28 @@ public partial class MainViewModel : ObservableObject
 
     private void RegisterAllTools()
     {
-        // ===== 代码格式化 =====
-        var fmtCat = new ToolCategory("代码格式化", "FormatText");
-        fmtCat.Tools.Add(new ToolItem("SQL语法格式化", "格式化和美化 SQL 代码，支持加载本地文件",
-            () => new Views.Format.SqlFormatView()));
-        fmtCat.Tools.Add(new ToolItem("SQL 生成器", "可视化表单驱动 SQL 生成，支持 SELECT/INSERT/UPDATE/DELETE/CREATE 五种模式",
-            () => new Views.Format.SqlGeneratorView()));
-        Categories.Add(fmtCat);
-
         // ===== 远程连接工具 =====
         var remoteCat = new ToolCategory("远程连接工具", "RemoteDesktop");
-        remoteCat.Tools.Add(new ToolItem("VNC 连接", "VNC 远程桌面连接，支持缩放、剪贴板共享、快捷键发送",
-            () => new Views.Remote.VncView()));
-        remoteCat.Tools.Add(new ToolItem("Windows远程桌面", "通过 RDP 协议连接 Windows 远程桌面，支持全屏、剪贴板共享",
-            () => new Views.Remote.RdpView()));
-        remoteCat.Tools.Add(new ToolItem("SSH 终端", "SSH 远程终端，支持命令执行、实时输出、交互式 Shell",
-            () => new Views.Remote.SshView()));
-        remoteCat.Tools.Add(new ToolItem("SFTP 文件管理", "通过 SFTP 协议连接远程服务器，浏览目录、上传、下载、删除文件",
-            () => new Views.Remote.FtpView()));
-        remoteCat.Tools.Add(new ToolItem("SSH 外挂", "点击启动 electerm（终端 + SSH + SFTP 客户端，首次使用需联网下载，MIT 开源）",
+        remoteCat.Tools.Add(new ToolItem("远程外挂连接",
+            "通过 electerm 外挂连接 SSH/SFTP/RDP/VNC（填参数自动连接，首次使用需联网下载）",
             () => new Views.Remote.ElectermLauncherView()));
         Categories.Add(remoteCat);
 
         // ===== 数据库连接工具 =====
         var dbCat = new ToolCategory("数据库连接工具", "Database");
-        dbCat.Tools.Add(new ToolItem("MySQL 连接", "MySQL 数据库连接，支持浏览表结构、执行 SQL 查询、查看结果",
-            () => new Views.Database.MySqlView()));
-        dbCat.Tools.Add(new ToolItem("openGauss 连接", "openGauss 国产数据库连接（PostgreSQL 协议），支持浏览表结构、执行 SQL 查询",
-            () => new Views.Database.OpenGaussView()));
-        dbCat.Tools.Add(new ToolItem("数据库外挂", "点击启动 DBX 通用数据库客户端（首次使用需联网下载，Apache-2.0 开源，支持 90+ 数据库）",
+        dbCat.Tools.Add(new ToolItem("数据库外挂连接",
+            "通过 DBX 外挂连接 MySQL/openGauss（填参数自动连接，首次使用需联网下载）",
             () => new Views.Database.DbxLauncherView()));
         Categories.Add(dbCat);
 
         // ===== 接口测试工具 =====
         var apiCat = new ToolCategory("接口测试工具", "Api");
-        apiCat.Tools.Add(new ToolItem("接口验证", "验证火灾探测系统所有接口的连通性，自动登录并逐一访问接口",
-            () => new Views.Api.ApiValidationView()));
-        apiCat.Tools.Add(new ToolItem("获取设备ID", "极早期火灾探测系统 API，支持登录、获取设备名称/通信地址/设备ID",
-            () => new Views.Api.DeviceApiTestView()));
+        apiCat.Tools.Add(new ToolItem("极早期接口验证",
+            "登录并获取设备ID、MQTT主题，批量验证接口连通性，支持自动检测",
+            () => new Views.Api.EarlyWarningApiView()));
+        apiCat.Tools.Add(new ToolItem("获取设备MAC地址",
+            "输入 IP 地址通过 SendARP 获取设备 MAC 地址，支持数据保存与导出",
+            () => new Views.Date.DeviceMacView()));
         Categories.Add(apiCat);
 
         // ===== 漏洞检测与系统优化 =====
@@ -176,22 +144,10 @@ public partial class MainViewModel : ObservableObject
         secCat.Tools.Add(new ToolItem("Druid漏洞检测",
             "Alibaba Druid 未授权访问漏洞检测，支持单目标/批量扫描、弱口令探测、报告导出",
             () => new Views.Security.DruidScanView()));
-        secCat.Tools.Add(new ToolItem("KylinOS漏洞扫描",
-            "检测麒麟系统 kylin-offline-upgrade 组件的本地权限提升漏洞，支持扫描、修复和验证",
-            () => new Views.Security.KylinOsScanView()));
         secCat.Tools.Add(new ToolItem("KylinOS运维策略",
-            "向麒麟系统远程部署定时重启（免密登录）和日志清理策略，支持扫描/部署/卸载/验证",
+            "向麒麟系统远程部署运维策略（定时重启/日志优化/VNC/openGauss）、扫描并修复系统补丁漏洞、优化系统服务与进程",
             () => new Views.Security.KylinOsDeployView()));
-        secCat.Tools.Add(new ToolItem("KylinOS系统优化",
-            "通过SSH远程优化麒麟系统，扫描并精简不必要的后台服务、进程和定时任务，提升系统性能与安全性",
-            () => new Views.Security.KylinOsOptimizeView()));
         Categories.Add(secCat);
-
-        // ===== 对称加密 =====
-        var cryptoCat = new ToolCategory("对称加密", "Lock");
-        cryptoCat.Tools.Add(new ToolItem("AES 加密/解密", "AES 对称加密，支持多种运算模式、填充模式、密钥长度",
-            () => new Views.Crypto.AesView()));
-        Categories.Add(cryptoCat);
 
         // ===== 串口调试工具 =====
         var serialCat = new ToolCategory("串口调试工具", "Serial");
@@ -201,12 +157,17 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Serial.EarlyWarningModbusView()));
         Categories.Add(serialCat);
 
-        // ===== 日期工具 =====
-        var dateCat = new ToolCategory("日期工具", "Calendar");
-        dateCat.Tools.Add(new ToolItem("Cron 表达式", "Cron 定时表达式生成与解析",
+        // ===== 其他工具（原日期工具，吸收 SQL 生成/格式化 与 AES 加密）=====
+        var otherCat = new ToolCategory("其他工具", "Calendar");
+        otherCat.Tools.Add(new ToolItem("Cron 表达式", "Cron 定时表达式生成与解析",
             () => new Views.Date.CronExpressionView()));
-        dateCat.Tools.Add(new ToolItem("获取设备MAC地址", "输入 IP 地址通过 SendARP 获取设备 MAC 地址，支持数据保存与导出",
-            () => new Views.Date.DeviceMacView()));
-        Categories.Add(dateCat);
+        otherCat.Tools.Add(new ToolItem("SQL语句生成与格式化",
+            "可视化表单生成 SQL（SELECT/INSERT/UPDATE/DELETE/CREATE）+ SQL 语法格式化",
+            () => new Views.Format.SqlToolView()));
+        otherCat.Tools.Add(new ToolItem("AES 加密/解密", "AES 对称加密，支持多种运算模式、填充模式、密钥长度",
+            () => new Views.Crypto.AesView()));
+        otherCat.Tools.Add(new ToolItem("群 Ping", "批量 ping 多个主机/IP，显示状态、延迟、丢包率，支持网段扫描与导出",
+            () => new Views.Other.GroupPingView()));
+        Categories.Add(otherCat);
     }
 }
