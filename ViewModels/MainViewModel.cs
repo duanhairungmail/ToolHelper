@@ -159,6 +159,8 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Database.MySqlView()));
         dbCat.Tools.Add(new ToolItem("openGauss 连接", "openGauss 国产数据库连接（PostgreSQL 协议），支持浏览表结构、执行 SQL 查询",
             () => new Views.Database.OpenGaussView()));
+        dbCat.Tools.Add(new ToolItem("数据库外挂", "点击启动 DBX 通用数据库客户端（首次使用需联网下载，Apache-2.0 开源，支持 90+ 数据库）",
+            () => new Views.Database.DbxLauncherView()));
         Categories.Add(dbCat);
 
         // ===== 接口测试工具 =====
