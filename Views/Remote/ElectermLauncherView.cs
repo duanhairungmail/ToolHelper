@@ -192,7 +192,7 @@ public class ElectermLauncherView : UserControl
         AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装") + "；「外挂连接」Tab 可填参唤起 electerm");
     }
 
-    /// <summary>日志写入：带 [HH:mm:ss] 时间戳；进度类消息替换末行避免刷屏</summary>
+    /// <summary>日志写入：进度类消息替换末行，避免逐 MB 刷屏。</summary>
     private void AppendLog(string msg)
     {
         if (!_logBox.Dispatcher.CheckAccess())
@@ -203,16 +203,14 @@ public class ElectermLauncherView : UserControl
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}";
         if (msg.StartsWith("下载中", StringComparison.Ordinal))
         {
-            var idx = _logBox.Text.LastIndexOf('\n');
-            if (idx >= 0)
+            var text = _logBox.Text;
+            var idx = text.LastIndexOf('\n');
+            var lastLine = idx >= 0 ? text[(idx + 1)..] : text;
+            if (lastLine.StartsWith("[") && lastLine.Contains("下载中", StringComparison.Ordinal))
             {
-                var lastLine = _logBox.Text[(idx + 1)..];
-                if (lastLine.StartsWith("[") && lastLine.Contains("下载中"))
-                {
-                    _logBox.Text = _logBox.Text[..(idx + 1)] + line;
-                    _logBox.ScrollToEnd();
-                    return;
-                }
+                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line;
+                _logBox.ScrollToEnd();
+                return;
             }
         }
         _logBox.AppendText(line + "\n");

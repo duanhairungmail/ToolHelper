@@ -125,7 +125,7 @@ public partial class MainViewModel : ObservableObject
         // ===== 数据库连接工具 =====
         var dbCat = new ToolCategory("数据库连接工具", "Database");
         dbCat.Tools.Add(new ToolItem("数据库外挂连接",
-            "通过 DBX 外挂连接 MySQL/openGauss（填参数自动连接，首次使用需联网下载）",
+            "通过 DBX 外挂连接 MySQL/postgresql（填参数自动连接，首次使用需联网下载）",
             () => new Views.Database.DbxLauncherView()));
         Categories.Add(dbCat);
 

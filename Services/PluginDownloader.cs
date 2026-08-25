@@ -64,6 +64,7 @@ public static class PluginDownloader
             long total = 0;
             int read;
             var lastMb = -1L;
+            var totalMb = size / (1024 * 1024);
             while ((read = await inStream.ReadAsync(buffer.AsMemory(), ct)) > 0)
             {
                 await outStream.WriteAsync(buffer.AsMemory(0, read), ct);
@@ -72,7 +73,9 @@ public static class PluginDownloader
                 if (mb != lastMb)
                 {
                     lastMb = mb;
-                    progress?.Report($"下载中 {mb} MB ...");
+                    progress?.Report(totalMb > 0
+                        ? $"下载中 {mb}/{totalMb} MB ..."
+                        : $"下载中 {mb}/? MB ...");
                 }
             }
         }

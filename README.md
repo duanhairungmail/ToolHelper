@@ -7,7 +7,7 @@
 | 分类 | 工具 |
 |------|------|
 | 远程连接工具 | 远程外挂连接（electerm：SSH/SFTP/RDP/VNC 深链唤起，按需下载） |
-| 数据库连接工具 | 数据库外挂连接（DBX：MySQL/openGauss 填参连接测试与深链唤起，按需下载） |
+| 数据库连接工具 | 数据库外挂连接（DBX：MySQL/postgresql 填参与深链唤起，按需下载） |
 | 接口测试工具 | 极早期接口验证（登录 + 设备ID/MQTT主题 + 16接口批量验证 + cron 自动检测）、获取设备MAC地址 |
 | 漏洞检测与系统优化 | Druid 漏洞检测（HTTP 扫描，xlsx/docx 报告导出）、KylinOS 运维策略（6 Tab：定时重启/日志优化/VNC Server/PostgreSQL/漏洞扫描/系统优化） |
 | 串口调试工具 | 基本串口调试、极早期 Modbus 调试（申弘/南瑞怡和双协议） |

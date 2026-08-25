@@ -7,7 +7,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
-using MySqlConnector;
 using ToolHelper.Services;
 using PackIcon = MaterialDesignThemes.Wpf.PackIcon;
 using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
@@ -15,7 +14,7 @@ using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
 namespace ToolHelper.Views.Database;
 
 /// <summary>
-/// 数据库外挂连接：DBX 下载/管理 + MySQL/openGauss 填参连接（连接测试 + dbx:// 深链唤起，不传密码）。
+/// 数据库外挂连接：DBX 下载/管理 + MySQL/postgresql 填参连接（dbx:// 深链唤起，不传密码）。
 /// 发布不打包插件，运行时从 GitHub latest release 下载 x64-portable.zip 版。
 /// </summary>
 public class DbxLauncherView : UserControl
@@ -37,14 +36,13 @@ public class DbxLauncherView : UserControl
     private TextBox _hostBox = new();
     private TextBox _portBox = new();
     private TextBox _userBox = new();
-    private PasswordBox _passBox = new();
     private TextBox _dbNameBox = new();
 
     // 数据库类型：显示名 / dbx type / 默认端口
     private static readonly (string Name, string Type, string Port)[] DbTypes =
     {
         ("MySQL", "mysql", "3306"),
-        ("openGauss", "opengauss", "5432"),
+        ("postgresql", "PostgreSQL", "5432"),
     };
 
     public DbxLauncherView()
@@ -131,7 +129,7 @@ public class DbxLauncherView : UserControl
 
         top.Children.Add(new TextBlock
         {
-            Text = "通过 DBX 外挂连接数据库（MySQL/openGauss），本界面仅做连接测试与日志展示。首次使用需联网下载插件。",
+            Text = "通过 DBX 外挂连接数据库（MySQL/postgresql），填参后唤起 DBX 完成连接。首次使用需联网下载插件。",
             FontSize = 13, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
         });
 
@@ -193,7 +191,7 @@ public class DbxLauncherView : UserControl
         AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装") + "；「外挂连接」Tab 可填参唤起 DBX");
     }
 
-    /// <summary>日志写入：带 [HH:mm:ss] 时间戳；进度类消息替换末行避免刷屏</summary>
+    /// <summary>日志写入：进度类消息替换末行，避免逐 MB 刷屏。</summary>
     private void AppendLog(string msg)
     {
         if (!_logBox.Dispatcher.CheckAccess())
@@ -204,16 +202,14 @@ public class DbxLauncherView : UserControl
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}";
         if (msg.StartsWith("下载中", StringComparison.Ordinal))
         {
-            var idx = _logBox.Text.LastIndexOf('\n');
-            if (idx >= 0)
+            var text = _logBox.Text;
+            var idx = text.LastIndexOf('\n');
+            var lastLine = idx >= 0 ? text[(idx + 1)..] : text;
+            if (lastLine.StartsWith("[") && lastLine.Contains("下载中", StringComparison.Ordinal))
             {
-                var lastLine = _logBox.Text[(idx + 1)..];
-                if (lastLine.StartsWith("[") && lastLine.Contains("下载中"))
-                {
-                    _logBox.Text = _logBox.Text[..(idx + 1)] + line;
-                    _logBox.ScrollToEnd();
-                    return;
-                }
+                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line;
+                _logBox.ScrollToEnd();
+                return;
             }
         }
         _logBox.AppendText(line + "\n");
@@ -384,22 +380,6 @@ public class DbxLauncherView : UserControl
         return tb;
     }
 
-    private PasswordBox MakePasswordBox(string hint, int minWidth = 120)
-    {
-        var pb = new PasswordBox
-        {
-            FontFamily = new FontFamily("Microsoft YaHei"),
-            FontSize = 13,
-            Margin = new Thickness(0, 0, 6, 0),
-            MinWidth = minWidth
-        };
-        var style = TryFindResource("MaterialDesignOutlinedPasswordBox") as Style
-                    ?? TryFindResource("MaterialDesignOutlinedTextBox") as Style;
-        if (style != null) pb.Style = style;
-        MaterialDesignThemes.Wpf.HintAssist.SetHint(pb, hint);
-        return pb;
-    }
-
     private TextBlock MakeLabel(string text) => new()
     {
         Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold,
@@ -431,53 +411,6 @@ public class DbxLauncherView : UserControl
             cmd.SetValue(null, $"\"{exe}\" \"%1\"");
         }
         return true;
-    }
-
-    // ========== 连接测试（MySQL 直连 / openGauss 走 Java 代理）==========
-
-    private async void TestDbConnection()
-    {
-        var host = _hostBox.Text.Trim();
-        var portText = _portBox.Text.Trim();
-        var user = _userBox.Text.Trim();
-        var pass = _passBox.Password;
-        if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(user))
-        { AppendLog("连接测试失败：请输入主机和用户名"); return; }
-        if (_dbTypeCombo.SelectedIndex < 0 || _dbTypeCombo.SelectedIndex >= DbTypes.Length) return;
-        var dbType = DbTypes[_dbTypeCombo.SelectedIndex].Type;
-        if (!int.TryParse(portText, out int port)) port = dbType == "mysql" ? 3306 : 5432;
-
-        AppendLog($"正在测试连接 {host}:{port} ({dbType}) ...");
-        try
-        {
-            if (dbType == "mysql")
-            {
-                var connStr = new MySqlConnectionStringBuilder
-                {
-                    Server = host, Port = (uint)port, UserID = user,
-                    Password = pass, ConnectionTimeout = 5
-                }.ConnectionString;
-                using var testConn = new MySqlConnection(connStr);
-                await testConn.OpenAsync();
-                using var cmd = new MySqlCommand("SELECT VERSION()", testConn);
-                var version = await cmd.ExecuteScalarAsync();
-                AppendLog($"连接测试成功：MySQL {version}");
-                SetStatus($"连接测试成功! MySQL {version}", true);
-            }
-            else
-            {
-                using var testProxy = new OpenGaussProxyClient();
-                await testProxy.ConnectAsync(host, portText, user, pass);
-                var version = await testProxy.GetVersionAsync();
-                AppendLog($"连接测试成功：{version}");
-                SetStatus($"连接测试成功! {(version.Length > 60 ? version[..60] + "..." : version)}", true);
-            }
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"连接测试失败: {ex.Message}");
-            SetStatus($"连接测试失败: {ex.Message}", false);
-        }
     }
 
     // ========== 外挂连接（通过 dbx:// 唤起，密码不传）==========
@@ -575,7 +508,7 @@ public class DbxLauncherView : UserControl
         return panel;
     }
 
-    /// <summary>Tab2 外挂连接：说明卡片 + 填参行 + 连接测试/外挂连接按钮</summary>
+    /// <summary>Tab2 外挂连接：说明卡片 + 填参行 + 外挂连接按钮</summary>
     private StackPanel BuildConnectTab()
     {
         var panel = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
@@ -622,16 +555,12 @@ public class DbxLauncherView : UserControl
         panel.Children.Add(connRow1);
 
         var connRow2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-        connRow2.Children.Add(MakeLabel("密码:"));
-        _passBox = MakePasswordBox("密码");
-        connRow2.Children.Add(_passBox);
         connRow2.Children.Add(MakeLabel("数据库:"));
         _dbNameBox = MakeBox("数据库（可选，外挂连接预填）", "", 140);
         connRow2.Children.Add(_dbNameBox);
         panel.Children.Add(connRow2);
 
         var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
-        connBtnRow.Children.Add(MakeButton("连接测试", TestDbConnection, false, PackIconKind.Network));
         connBtnRow.Children.Add(MakeButton("外挂连接", LaunchDbxConnection, true, PackIconKind.OpenInApp));
         panel.Children.Add(connBtnRow);
 
