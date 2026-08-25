@@ -144,7 +144,7 @@ public class KylinOsDeployView : SshToolBaseView
     {
         _featureCombo = new ComboBox
         {
-            MinWidth = 170,
+            Width = 170,
             Margin = new Thickness(0, 0, 12, 0),
             VerticalAlignment = VerticalAlignment.Center,
             FontSize = 13,
