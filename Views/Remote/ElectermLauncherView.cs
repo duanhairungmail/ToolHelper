@@ -14,7 +14,7 @@ using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
 namespace ToolHelper.Views.Remote;
 
 /// <summary>
-/// 远程外挂连接：electerm 下载/管理 + SSH/SFTP/RDP/VNC 填参连接（electerm:// 深链唤起，不传密码）。
+/// 远程外挂连接：electerm 下载/管理 + SSH/SFTP/RDP/VNC 填参连接（SFTP 使用 --sftp-only，不传密码）。
 /// 发布不打包插件，运行时从 GitHub latest release 下载 win-x64-portable 版。
 /// </summary>
 public class ElectermLauncherView : UserControl
@@ -37,7 +37,7 @@ public class ElectermLauncherView : UserControl
     private TextBox _portBox = new();
     private TextBox _userBox = new();
 
-    // 协议定义：显示名 / electerm type / 默认端口
+    // 协议定义：显示名 / 连接类型 / 默认端口
     private static readonly (string Name, string Type, string Port)[] Protocols =
     {
         ("SSH", "ssh", "22"),
@@ -426,7 +426,46 @@ public class ElectermLauncherView : UserControl
         var type = Protocols[_protocolCombo.SelectedIndex].Type;
         var protoName = Protocols[_protocolCombo.SelectedIndex].Name;
 
-        // 协议未注册时自动注册（portable 版未启动过会弹「获取打开此 electerm 链接的应用」）
+        var exe = FindElectermExe();
+        if (string.IsNullOrEmpty(exe))
+        {
+            AppendLog("外挂连接失败：插件未安装，请先点击「下载插件」");
+            return;
+        }
+
+        // electerm 深链不支持 type=sftp，SFTP 使用官方 --sftp-only 命令行参数。
+        if (type == "sftp")
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = exe,
+                    UseShellExecute = false,
+                    WorkingDirectory = Path.GetDirectoryName(exe) ?? ""
+                };
+                startInfo.ArgumentList.Add("--sftp-only");
+                if (!string.IsNullOrEmpty(user))
+                {
+                    startInfo.ArgumentList.Add("--user");
+                    startInfo.ArgumentList.Add(user);
+                }
+                startInfo.ArgumentList.Add("--port");
+                startInfo.ArgumentList.Add(portText);
+                startInfo.ArgumentList.Add(host);
+                Process.Start(startInfo);
+                AppendLog("已唤起 electerm SFTP，请在 electerm 中输入密码完成连接");
+                SetStatus("已唤起 electerm（SFTP）", true);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"SFTP 外挂连接失败: {ex.Message}");
+                SetStatus($"SFTP 外挂连接失败: {ex.Message}", false);
+            }
+            return;
+        }
+
+        // SSH/RDP/VNC 协议未注册时自动注册（portable 版未启动过会弹「获取打开此 electerm 链接的应用」）
         if (!EnsureProtocolRegistered())
         {
             AppendLog("未检测到 electerm:// 协议且未找到本地 electerm，请先点击「下载插件」并启动一次 electerm");
@@ -450,7 +489,6 @@ public class ElectermLauncherView : UserControl
         catch (Exception ex)
         {
             // 协议刚注册时系统可能尚未感知，回退：直接用本地 exe 携带 URL 参数启动
-            var exe = FindElectermExe();
             if (!string.IsNullOrEmpty(exe))
             {
                 try
@@ -515,7 +553,7 @@ public class ElectermLauncherView : UserControl
 
         // 说明卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
         var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
-        cardRows.Children.Add(new TextBlock { Text = "🔗 点击「外挂连接」通过 electerm:// 深链唤起 electerm 并预填连接信息，密码在 electerm 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        cardRows.Children.Add(new TextBlock { Text = "🔗 SSH/RDP/VNC 通过 electerm:// 唤起；SFTP 使用 --sftp-only，只显示 SFTP 面板，密码在 electerm 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
         cardRows.Children.Add(new TextBlock { Text = "📌 协议切换自动填充默认端口（SSH/SFTP 22、RDP 3389、VNC 5900）；用户名可选", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
         panel.Children.Add(new Border
         {
