@@ -16,7 +16,6 @@
 ## 环境要求
 
 - **运行时**：.NET 8.0 Desktop Runtime（Windows）
-- **Java（可选）**：openGauss 连接功能需要本机可运行 `java`（本地代理进程依赖）
 - **Access Database Engine（可选）**：读取 Access/Excel 文件（System.Data.OleDb）时需要
 - **联网（可选）**：electerm / DBX 外挂发布包不包含插件本体，首次使用点击「下载插件」时联网从 GitHub 下载便携版到 `plugins/` 下
 
@@ -47,12 +46,11 @@ dotnet run --project ToolHelper.csproj
 ToolHelper/
 ├── ViewModels/          # MainViewModel（工具注册/分类/搜索过滤），ToolCategory/ToolItem
 ├── Views/               # 各工具视图（按功能域分目录），基类 StandardToolView / SshToolBaseView
-├── Services/            # FileLogger（按天分文件日志）、OpenGaussProxyClient（Java 代理客户端）、PluginDownloader（外挂下载）
+├── Services/            # FileLogger（按天分文件日志）、PluginDownloader（外挂下载）
 ├── Resources/           # 图标、x11vnc 静态二进制（KylinOS VNC Server 部署用）
-├── plugins/             # 随发布复制的插件（KylinOS 补丁等）；electerm/dbx 为运行时按需下载目录，不随发布打包
-└── openGaussProxy/      # openGauss Java HTTP 代理（随发布复制）
+└── plugins/             # 随发布复制的 KylinOS 资产；electerm/dbx 按需下载
 ```
 
 ## 技术栈
 
-.NET 8.0-windows · WPF · MaterialDesignThemes · CommunityToolkit.Mvvm · SSH.NET · MySqlConnector · EPPlus · DocumentFormat.OpenXml · BouncyCastle · Newtonsoft.Json · System.IO.Ports · System.Data.OleDb
+.NET 8.0-windows · WPF · MaterialDesignThemes · CommunityToolkit.Mvvm · SSH.NET · EPPlus · DocumentFormat.OpenXml · BouncyCastle · Newtonsoft.Json · System.IO.Ports · System.Data.OleDb
