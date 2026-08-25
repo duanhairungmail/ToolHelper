@@ -75,6 +75,47 @@ public class KylinOsDeployView : SshToolBaseView
     private TextBox _optLogBox = new();
     private TextBlock _optInfoText = new(), _optSystemInfoText = new();
 
+    // ===== 顶部功能选择与激活检测 =====
+    private ComboBox _featureCombo = new();
+    private Button _activationBtn = new();
+    private static readonly (string Name, PackIconKind Icon, int TabIndex)[] FeatureMenu =
+    {
+        ("定时重启", PackIconKind.ClockOutline, 0),
+        ("日志优化", PackIconKind.DeleteSweep, 1),
+        ("VNC Server", PackIconKind.Monitor, 2),
+        ("PostgreSQL连接", PackIconKind.Database, 3),
+        ("漏洞扫描", PackIconKind.ShieldAlert, 4),
+        ("系统优化", PackIconKind.Flash, 5)
+    };
+
+    private enum ActivationState { Activated, NotActivated, Unknown }
+
+    private const string ActivationProbeCommand = """
+        sh -c '
+        for t in kylin-activation activate-tool kylin-activate; do
+          p=$(command -v "$t" 2>/dev/null) || continue
+          printf "tool.%s=%s\n" "$t" "$p"
+          for arg in --status --query; do
+            out=$(timeout 8s "$p" "$arg" 2>&1)
+            code=$?
+            out=$(printf "%s" "$out" | tr "\r\n" "  ")
+            name=${arg#--}
+            printf "cli.%s.%s=%s\n" "$t" "$name" "$out"
+            printf "cli.%s.%s.exit=%s\n" "$t" "$name" "$code"
+          done
+        done
+        for f in /etc/kylin-activation/status /etc/.kyinfo; do
+          test -f "$f" || continue
+          out=$(cat "$f" 2>/dev/null | tr "\r\n" "  ")
+          printf "file.%s=%s\n" "$f" "$out"
+        done
+        printf "svc.check.enabled=%s\n" "$(systemctl is-enabled kylin-activation-check.service 2>/dev/null)"
+        printf "svc.check.active=%s\n" "$(systemctl is-active kylin-activation-check.service 2>/dev/null)"
+        os=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d "\"")
+        printf "os.pretty=%s\n" "$os"
+        '
+        """;
+
     /// <summary>本地开放配置目录：从 BaseDirectory 向上逐级查找 plugins/opengauss_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
     private static string OpenGaussConfDir
     {
@@ -99,6 +140,67 @@ public class KylinOsDeployView : SshToolBaseView
 
     // ================== UI 构建 ==================
 
+    protected override void BuildConnRowLeading(StackPanel connBtnRow)
+    {
+        _featureCombo = new ComboBox
+        {
+            MinWidth = 170,
+            Margin = new Thickness(0, 0, 12, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            FontSize = 13,
+            FontFamily = new FontFamily("Microsoft YaHei")
+        };
+        if (TryFindResource("MaterialDesignOutlinedComboBox") is Style style)
+            _featureCombo.Style = style;
+        HintAssist.SetHint(_featureCombo, "功能选择");
+
+        foreach (var (name, icon, _) in FeatureMenu)
+        {
+            var item = new StackPanel { Orientation = Orientation.Horizontal };
+            item.Children.Add(new PackIcon
+            {
+                Kind = icon,
+                Width = 16,
+                Height = 16,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            });
+            item.Children.Add(new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center });
+            _featureCombo.Items.Add(item);
+        }
+
+        _featureCombo.SelectionChanged += (_, _) =>
+        {
+            var index = _featureCombo.SelectedIndex;
+            if (index >= 0 && index < FeatureMenu.Length)
+                _tabControl.SelectedIndex = FeatureMenu[index].TabIndex;
+        };
+        connBtnRow.Children.Add(_featureCombo);
+    }
+
+    protected override void BuildConnRowMiddle(StackPanel connBtnRow)
+    {
+        _activationBtn = MakeButton("激活检测", DoActivationCheck, false, PackIconKind.ShieldKey);
+        _activationBtn.IsEnabled = false;
+        connBtnRow.Children.Add(_activationBtn);
+    }
+
+    protected override void OnConnStateChanged(bool connected)
+    {
+        _activationBtn.IsEnabled = connected;
+    }
+
+    protected override void SetStatus(string msg, bool success)
+    {
+        if (string.IsNullOrWhiteSpace(msg)) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => SetStatus(msg, success));
+            return;
+        }
+        AppendCurrentTabLog((success ? "ℹ️ " : "❌ ") + msg);
+    }
+
     protected override void BuildToolContent(DockPanel root, StackPanel topPanel)
     {
         // 初始化数据
@@ -108,28 +210,7 @@ public class KylinOsDeployView : SshToolBaseView
         InitTab4Items();
         InitTab7Items();
 
-        // 顶部按钮行：定时重启 + 日志优化 + VNC Server + PostgreSQL连接 + 漏洞扫描 + 系统优化 + 复制结果（同一行，统一样式）
-        var topBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
-        var tab1Btn = MakeButton("定时重启", () => _tabControl.SelectedIndex = 0, false, PackIconKind.ClockOutline);
-        var tab2Btn = MakeButton("日志优化", () => _tabControl.SelectedIndex = 1, false, PackIconKind.DeleteSweep);
-        var tab3Btn = MakeButton("VNC Server", () => _tabControl.SelectedIndex = 2, false, PackIconKind.Monitor);
-        var tab4Btn = MakeButton("PostgreSQL连接", () => _tabControl.SelectedIndex = 3, false, PackIconKind.Database);
-        var tab6Btn = MakeButton("漏洞扫描", () => _tabControl.SelectedIndex = 4, false, PackIconKind.ShieldAlert);
-        var tab7Btn = MakeButton("系统优化", () => _tabControl.SelectedIndex = 5, false, PackIconKind.Flash);
-        topBtnRow.Children.Add(tab1Btn);
-        topBtnRow.Children.Add(tab2Btn);
-        topBtnRow.Children.Add(tab3Btn);
-        topBtnRow.Children.Add(tab4Btn);
-        topBtnRow.Children.Add(tab6Btn);
-        topBtnRow.Children.Add(tab7Btn);
-        topBtnRow.Children.Add(MakeButton("复制结果", CopyResult, false, PackIconKind.ContentCopy));
-        StatusText.VerticalAlignment = VerticalAlignment.Center;
-        StatusText.Margin = new Thickness(16, 0, 0, 0);
-        StatusText.FontSize = 13;
-        topBtnRow.Children.Add(StatusText);
-        topPanel.Children.Add(topBtnRow);
-
-        // TabControl（隐藏默认 Tab 标题，由上方按钮切换）
+        // TabControl（隐藏默认 Tab 标题，由连接行左侧下拉框切换）
         _tabControl.Margin = new Thickness(0, 4, 0, 4);
 
         var tab1 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
@@ -159,6 +240,8 @@ public class KylinOsDeployView : SshToolBaseView
         // TabControl 直接挂到根容器（顶部面板之后 → 成为填充子元素，高度随窗口缩放）
         root.Children.Add(_tabControl);
 
+        // 下拉框早于 TabControl 构建，只能在六个 Tab 就绪后设置默认项。
+        _featureCombo.SelectedIndex = 0;
         AppendTab1("点击 [连接SSH] 连接到麒麟系统，然后在对应 Tab 中执行扫描/部署/卸载/验证操作。");
     }
 
@@ -196,6 +279,7 @@ public class KylinOsDeployView : SshToolBaseView
         _tab1VerifyBtn.IsEnabled = false;
         btnRow.Children.Add(_tab1VerifyBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab1Log.Clear(), false, PackIconKind.NotificationClearAll));
+        btnRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_tab1Log), false, PackIconKind.ContentCopy));
         top.Children.Add(btnRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -241,6 +325,7 @@ public class KylinOsDeployView : SshToolBaseView
         _tab2VerifyBtn.IsEnabled = false;
         btnRow.Children.Add(_tab2VerifyBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab2Log.Clear(), false, PackIconKind.NotificationClearAll));
+        btnRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_tab2Log), false, PackIconKind.ContentCopy));
         top.Children.Add(btnRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -298,6 +383,7 @@ public class KylinOsDeployView : SshToolBaseView
         _tab3UninstallBtn.IsEnabled = false;
         btnRow.Children.Add(_tab3UninstallBtn);
         btnRow.Children.Add(MakeButton("日志清理", () => _tab3Log.Clear(), false, PackIconKind.NotificationClearAll));
+        btnRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_tab3Log), false, PackIconKind.ContentCopy));
         top.Children.Add(btnRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -350,6 +436,7 @@ public class KylinOsDeployView : SshToolBaseView
         btnRow.Children.Add(_tab4UninstallBtn);
         btnRow.Children.Add(MakeButton("重启服务", RestartOpenGauss, false, PackIconKind.Restart));
         btnRow.Children.Add(MakeButton("日志清理", () => _tab4Log.Clear(), false, PackIconKind.NotificationClearAll));
+        btnRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_tab4Log), false, PackIconKind.ContentCopy));
         top.Children.Add(btnRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -389,6 +476,7 @@ public class KylinOsDeployView : SshToolBaseView
         _vulVerifyBtn.IsEnabled = false;
         actionRow.Children.Add(_vulVerifyBtn);
         actionRow.Children.Add(MakeButton("日志清理", () => _vulLogBox.Clear(), false, PackIconKind.NotificationClearAll));
+        actionRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_vulLogBox), false, PackIconKind.ContentCopy));
         top.Children.Add(actionRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -498,6 +586,7 @@ public class KylinOsDeployView : SshToolBaseView
         _optRestoreBtn.IsEnabled = false;
         actionRow.Children.Add(_optRestoreBtn);
         actionRow.Children.Add(MakeButton("日志清理", () => _optLogBox.Clear(), false, PackIconKind.NotificationClearAll));
+        actionRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_optLogBox), false, PackIconKind.ContentCopy));
         top.Children.Add(actionRow);
 
         DockPanel.SetDock(top, Dock.Top);
@@ -571,6 +660,51 @@ public class KylinOsDeployView : SshToolBaseView
     private void AppendTab4(string text) { _tab4Log.AppendText(text + "\n"); _tab4Log.ScrollToEnd(); }
     private void AppendTab6(string text) { _vulLogBox.AppendText(text + "\n"); _vulLogBox.ScrollToEnd(); }
     private void AppendTab7(string text) { _optLogBox.AppendText(text + "\n"); _optLogBox.ScrollToEnd(); }
+
+    private TextBox? CurrentTabLogBox() => _tabControl.SelectedIndex switch
+    {
+        0 => _tab1Log,
+        1 => _tab2Log,
+        2 => _tab3Log,
+        3 => _tab4Log,
+        4 => _vulLogBox,
+        5 => _optLogBox,
+        _ => null
+    };
+
+    private void AppendCurrentTabLog(string text)
+    {
+        var logBox = CurrentTabLogBox();
+        if (logBox == null) return;
+        logBox.AppendText(text + "\n");
+        logBox.ScrollToEnd();
+    }
+
+    private void CopyTabLog(TextBox logBox)
+    {
+        var text = logBox.Text;
+        if (string.IsNullOrEmpty(text))
+        {
+            SetStatus("无可复制内容", false);
+            return;
+        }
+
+        if (SetClipboardTextWin32(text))
+        {
+            SetStatus("已复制当前功能日志到剪贴板", true);
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetDataObject(text, true);
+            SetStatus("已复制当前功能日志到剪贴板", true);
+        }
+        catch
+        {
+            SetStatus("复制失败: 剪贴板被其他程序占用，请稍后重试", false);
+        }
+    }
 
     /// <summary>线程安全日志（在 Task.Run 内部调用时投递到 UI 线程）</summary>
     private void AppendTab3ThreadSafe(string text)
@@ -694,6 +828,119 @@ public class KylinOsDeployView : SshToolBaseView
     {
         DisableAllButtons();
     }
+
+    #region 激活检测（只读探测，依赖 SSH）
+
+    private async void DoActivationCheck()
+    {
+        var ssh = Ssh;
+        if (ssh == null || !ssh.IsConnected)
+        {
+            SetStatus("请先连接SSH", false);
+            return;
+        }
+
+        _activationBtn.IsEnabled = false;
+        SetStatus("正在检测激活状态...", true);
+        try
+        {
+            var raw = await Task.Run(() => RunCommand(ssh, ActivationProbeCommand));
+            var (state, detail) = ParseActivationResult(raw);
+            SetStatus(state switch
+            {
+                ActivationState.Activated => "检测结果: 已激活",
+                ActivationState.NotActivated => "检测结果: 未激活",
+                _ => "检测结果: 无法判定"
+            }, state == ActivationState.Activated);
+            ShowActivationDialog(state, detail, raw);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"激活检测失败: {ex.Message}", false);
+        }
+        finally
+        {
+            _activationBtn.IsEnabled = Ssh?.IsConnected == true;
+        }
+    }
+
+    private static (ActivationState State, string Detail) ParseActivationResult(string raw)
+    {
+        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = line.IndexOf('=');
+            if (separator <= 0) continue;
+            labels[line[..separator].Trim()] = line[(separator + 1)..].Trim('\r', ' ');
+        }
+
+        var state = ActivationState.Unknown;
+        var evidence = "未发现可识别的激活状态字段";
+        foreach (var pair in labels)
+        {
+            if (!pair.Key.StartsWith("cli.", StringComparison.OrdinalIgnoreCase) ||
+                pair.Key.EndsWith(".exit", StringComparison.OrdinalIgnoreCase) ||
+                labels.GetValueOrDefault(pair.Key + ".exit") != "0")
+                continue;
+
+            state = ReadActivationSignal(pair.Value);
+            if (state == ActivationState.Unknown) continue;
+            evidence = $"{pair.Key}: {pair.Value}";
+            break;
+        }
+
+        if (state == ActivationState.Unknown)
+        {
+            foreach (var pair in labels.Where(p => p.Key.StartsWith("file.", StringComparison.OrdinalIgnoreCase)))
+            {
+                state = ReadActivationSignal(pair.Value);
+                if (state == ActivationState.Unknown) continue;
+                evidence = $"{pair.Key}: {pair.Value}";
+                break;
+            }
+        }
+
+        var system = labels.GetValueOrDefault("os.pretty", "未知");
+        var service = $"{labels.GetValueOrDefault("svc.check.active", "未知")}/{labels.GetValueOrDefault("svc.check.enabled", "未知")}";
+        return (state, $"系统: {system}\n判定依据: {evidence}\n激活检查服务(active/enabled): {service}");
+    }
+
+    private static ActivationState ReadActivationSignal(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        var negative = new[] { "未激活", "not activated", "not_activated", "unactivated", "试用" };
+        if (negative.Any(normalized.Contains)) return ActivationState.NotActivated;
+
+        var positive = new[] { "已激活", "status=activated", "state=activated", "activation_status=activated" };
+        return positive.Any(normalized.Contains) ? ActivationState.Activated : ActivationState.Unknown;
+    }
+
+    private void ShowActivationDialog(ActivationState state, string detail, string raw)
+    {
+        if (state == ActivationState.Activated)
+        {
+            MessageBox.Show($"系统已激活。\n\n{detail}", "激活检测", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (state == ActivationState.NotActivated)
+        {
+            var activate = MessageBox.Show($"系统未激活。\n\n{detail}\n\n是否立即激活？", "激活检测",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (activate == MessageBoxResult.Yes)
+            {
+                AppendCurrentTabLog("❌ 当前目标版本的密钥激活命令尚未校准，未执行特权操作。");
+                MessageBox.Show("当前目标版本的密钥激活命令尚未完成真机校准，无法安全执行自动激活。",
+                    "暂不支持自动激活", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            return;
+        }
+
+        MessageBox.Show($"无法可靠判定激活状态。\n\n{detail}\n\n原始探测输出:\n{raw}", "激活检测",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    #endregion
 
     private void DisableAllButtons()
     {

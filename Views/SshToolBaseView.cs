@@ -77,6 +77,15 @@ public abstract class SshToolBaseView : UserControl
     /// </summary>
     protected abstract string DescriptionText { get; }
 
+    /// <summary>在“连接SSH”按钮左侧插入子类控件。</summary>
+    protected virtual void BuildConnRowLeading(StackPanel connBtnRow) { }
+
+    /// <summary>在“连接SSH”和“断开”按钮之间插入子类控件。</summary>
+    protected virtual void BuildConnRowMiddle(StackPanel connBtnRow) { }
+
+    /// <summary>SSH 连接状态变化后通知子类。</summary>
+    protected virtual void OnConnStateChanged(bool connected) { }
+
     private void BuildBaseUI()
     {
         var root = new DockPanel();
@@ -110,8 +119,10 @@ public abstract class SshToolBaseView : UserControl
 
         // 连接按钮行
         var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        BuildConnRowLeading(connBtnRow);
         ConnBtn = MakeButton("连接SSH", Connect, true, PackIconKind.Login);
         connBtnRow.Children.Add(ConnBtn);
+        BuildConnRowMiddle(connBtnRow);
         DisconnectBtn = MakeButton("断开", Disconnect, false, PackIconKind.Logout);
         DisconnectBtn.IsEnabled = false;
         connBtnRow.Children.Add(DisconnectBtn);
@@ -121,7 +132,12 @@ public abstract class SshToolBaseView : UserControl
         ConnStatus.VerticalAlignment = VerticalAlignment.Center;
         ConnStatus.Margin = new Thickness(16, 0, 0, 0);
         connBtnRow.Children.Add(ConnStatus);
-        topPanel.Children.Add(connBtnRow);
+        topPanel.Children.Add(new ScrollViewer
+        {
+            Content = connBtnRow,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled
+        });
 
         // 先挂载顶部面板，再让子类在连接区与结果区之间插入内容
         // （子类此时可向 root 追加填充子元素，成为 DockPanel 的最后一个子元素自动填充剩余高度）
@@ -225,7 +241,7 @@ public abstract class SshToolBaseView : UserControl
         ResultBox.ScrollToEnd();
     }
 
-    protected void SetStatus(string msg, bool success)
+    protected virtual void SetStatus(string msg, bool success)
     {
         StatusText.Text = msg;
         StatusText.Foreground = success ? Brushes.Green : Brushes.Red;
@@ -278,6 +294,7 @@ public abstract class SshToolBaseView : UserControl
             PassBox.IsEnabled = false;
             SetStatus($"已连接到 {user}@{host}:{port}", true);
             OnConnected();
+            OnConnStateChanged(true);
         }
         catch (Exception ex)
         {
@@ -304,6 +321,7 @@ public abstract class SshToolBaseView : UserControl
         UserBox.IsEnabled = true;
         PassBox.IsEnabled = true;
         OnDisconnected();
+        OnConnStateChanged(false);
     }
 
     protected string RunCommand(SshClient ssh, string cmd)
