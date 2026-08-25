@@ -116,19 +116,19 @@ public class KylinOsDeployView : SshToolBaseView
         '
         """;
 
-    /// <summary>本地开放配置目录：从 BaseDirectory 向上逐级查找 plugins/opengauss_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
-    private static string OpenGaussConfDir
+    /// <summary>本地 PostgreSQL 配置目录：从 BaseDirectory 向上逐级查找 plugins/postgresql_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
+    private static string PostgreSqlConfDir
     {
         get
         {
             var dir = AppDomain.CurrentDomain.BaseDirectory;
             for (int i = 0; i < 5; i++)
             {
-                var candidate = Path.Combine(dir, "plugins", "opengauss_conf");
+                var candidate = Path.Combine(dir, "plugins", "postgresql_conf");
                 if (Directory.Exists(candidate)) return candidate;
                 dir = Path.GetFullPath(Path.Combine(dir, ".."));
             }
-            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "plugins", "opengauss_conf");
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "plugins", "postgresql_conf");
         }
     }
 
@@ -1025,8 +1025,16 @@ public class KylinOsDeployView : SshToolBaseView
         // 确保 Unix 换行符（LF），避免 Windows CRLF 导致 Linux 工具解析失败
         using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(content.Replace("\r\n", "\n"))))
             Sftp!.UploadFile(ms, tmpFile, true);
-        // mv 到系统目录需要 root 权限
-        RunCommandSudo(Ssh!, $"mv {tmpFile} {remotePath} && chmod {mode} {remotePath}", username, password);
+        // install 同时设置系统文件属主和权限，避免 cron 拒绝非 root 属主的任务文件。
+        RunCommandSudo(Ssh!, $"install -o root -g root -m {mode} {tmpFile} {remotePath} && rm -f {tmpFile}", username, password);
+    }
+
+    private void EnsureCronService(SshClient ssh, string username, string password)
+    {
+        RunCommandSudo(ssh, "systemctl enable --now cron 2>&1", username, password);
+        var state = RunCommand(ssh, "systemctl is-active cron 2>/dev/null").Trim();
+        if (state != "active")
+            throw new InvalidOperationException($"cron 服务未运行，当前状态: {state}");
     }
 
     // ================== 功能一：定时重启 ==================
@@ -1044,27 +1052,33 @@ public class KylinOsDeployView : SshToolBaseView
             var ssh = Ssh;
             await Task.Run(() =>
             {
+                var cronServiceActive = RunCommand(ssh, "systemctl is-active cron 2>/dev/null").Trim() == "active";
+                Dispatcher.Invoke(() => AppendTab1($"  cron.service → {(cronServiceActive ? "✅ 运行中" : "❌ 未运行")}"));
+
                 var scanCmds = new (string cmd, int idx)[]
                 {
                     ("test -x /usr/local/bin/scheduled-reboot.sh && echo OK || echo MISSING", 0),
                     ("test -x /usr/local/bin/clear-autologin.sh && echo OK || echo MISSING", 1),
                     ("test -f /etc/xdg/autostart/clear-autologin.desktop && echo OK || echo MISSING", 2),
-                    ("test -f /etc/cron.d/auto-reboot && echo OK || echo MISSING", 3),
-                    ("test -f /etc/sudoers.d/auto-reboot && echo OK || echo MISSING", 4),
+                    ("if ! test -f /etc/cron.d/auto-reboot; then echo MISSING; elif test \"$(stat -c '%U:%G' /etc/cron.d/auto-reboot)\" != 'root:root'; then echo WRONG_OWNER; else echo OK; fi", 3),
+                    ("if ! test -f /etc/sudoers.d/auto-reboot; then echo MISSING; elif test \"$(stat -c '%U:%G' /etc/sudoers.d/auto-reboot)\" != 'root:root'; then echo WRONG_OWNER; else echo OK; fi", 4),
                 };
 
                 int deployed = 0;
                 foreach (var (cmd, idx) in scanCmds)
                 {
                     var output = RunCommand(ssh, cmd).Trim();
-                    var ok = output.Contains("OK");
+                    var ok = output == "OK" && (idx != 3 || cronServiceActive);
+                    var detail = output == "WRONG_OWNER"
+                        ? "属主必须为 root:root"
+                        : idx == 3 && !cronServiceActive ? "cron 服务未运行" : ok ? "已部署" : "未部署";
                     Dispatcher.Invoke(() =>
                     {
                         _tab1Items[idx].IsDeployed = ok;
                         _tab1Items[idx].StatusIcon = ok ? "✅" : "❌";
-                        _tab1Items[idx].Detail = ok ? "已部署" : "未部署";
+                        _tab1Items[idx].Detail = detail;
                         _tab1Dg.Items.Refresh();
-                        AppendTab1($"  {_tab1Items[idx].ItemName} → {(ok ? "✅ 已部署" : "❌ 未部署")}");
+                        AppendTab1($"  {_tab1Items[idx].ItemName} → {(ok ? "✅ 已部署" : $"❌ {detail}")}");
                     });
                     if (ok) deployed++;
                 }
@@ -1130,6 +1144,7 @@ public class KylinOsDeployView : SshToolBaseView
 
                 // Step 4: cron
                 UploadViaSftp(CRON_AUTO_REBOOT, "/etc/cron.d/auto-reboot", 644, sshUser, sshPass);
+                EnsureCronService(ssh, sshUser, sshPass);
                 Dispatcher.Invoke(() => { _tab1Items[3].StatusIcon = "✅"; _tab1Items[3].Detail = "部署中"; _tab1Dg.Items.Refresh(); AppendTab1("  ✅ /etc/cron.d/auto-reboot 已部署"); });
 
                 // Step 5: sudoers (with visudo validation)
@@ -1140,7 +1155,7 @@ public class KylinOsDeployView : SshToolBaseView
                 var validation = RunCommand(ssh, $"visudo -c -f {tmpSudoers} 2>&1");
                 if (validation.Contains("parsed OK") || validation.Contains("syntax OK") || validation.Contains("解析正确"))
                 {
-                    RunCommandSudo(ssh, $"mv {tmpSudoers} /etc/sudoers.d/auto-reboot && chmod 440 /etc/sudoers.d/auto-reboot", sshUser, sshPass);
+                    RunCommandSudo(ssh, $"install -o root -g root -m 440 {tmpSudoers} /etc/sudoers.d/auto-reboot && rm -f {tmpSudoers}", sshUser, sshPass);
                     Dispatcher.Invoke(() => { _tab1Items[4].StatusIcon = "✅"; _tab1Items[4].Detail = "语法校验通过"; _tab1Dg.Items.Refresh(); AppendTab1("  ✅ /etc/sudoers.d/auto-reboot 已部署（语法校验通过）"); });
                 }
                 else
@@ -1253,6 +1268,8 @@ public class KylinOsDeployView : SshToolBaseView
             await Task.Run(() =>
             {
                 int deployed = 0;
+                var cronServiceActive = RunCommand(ssh, "systemctl is-active cron 2>/dev/null").Trim() == "active";
+                Dispatcher.Invoke(() => AppendTab2($"  cron.service → {(cronServiceActive ? "✅ 运行中" : "❌ 未运行")}"));
 
                 // 检查脚本
                 var scriptOk = RunCommand(ssh, "test -x /usr/local/bin/clean-logs.sh && echo OK || echo MISSING").Trim().Contains("OK");
@@ -1267,14 +1284,18 @@ public class KylinOsDeployView : SshToolBaseView
                 if (scriptOk) deployed++;
 
                 // 检查 cron
-                var cronOk = RunCommand(ssh, "test -f /etc/cron.d/clean-logs && echo OK || echo MISSING").Trim().Contains("OK");
+                var cronOutput = RunCommand(ssh, "if ! test -f /etc/cron.d/clean-logs; then echo MISSING; elif test \"$(stat -c '%U:%G' /etc/cron.d/clean-logs)\" != 'root:root'; then echo WRONG_OWNER; else echo OK; fi").Trim();
+                var cronOk = cronOutput == "OK" && cronServiceActive;
+                var cronDetail = cronOutput == "WRONG_OWNER"
+                    ? "属主必须为 root:root"
+                    : !cronServiceActive ? "cron 服务未运行" : cronOk ? "已部署" : "未部署";
                 Dispatcher.Invoke(() =>
                 {
                     _tab2Items[1].IsDeployed = cronOk;
                     _tab2Items[1].StatusIcon = cronOk ? "✅" : "❌";
-                    _tab2Items[1].Detail = cronOk ? "已部署" : "未部署";
+                    _tab2Items[1].Detail = cronDetail;
                     _tab2Dg.Items.Refresh();
-                    AppendTab2($"  /etc/cron.d/clean-logs → {(cronOk ? "✅ 已部署" : "❌ 未部署")}");
+                    AppendTab2($"  /etc/cron.d/clean-logs → {(cronOk ? "✅ 已部署" : $"❌ {cronDetail}")}");
                 });
                 if (cronOk) deployed++;
 
@@ -1333,6 +1354,7 @@ public class KylinOsDeployView : SshToolBaseView
 
                 // Step 2: cron
                 UploadViaSftp(CRON_CLEAN_LOGS, "/etc/cron.d/clean-logs", 644, sshUser, sshPass);
+                EnsureCronService(ssh, sshUser, sshPass);
                 Dispatcher.Invoke(() => { _tab2Items[1].StatusIcon = "✅"; _tab2Items[1].Detail = "已部署"; _tab2Dg.Items.Refresh(); AppendTab2("  ✅ /etc/cron.d/clean-logs 已部署"); });
             });
 
@@ -1909,7 +1931,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
                 // Step 3: 备份原文件并上传新文件
                 var files = new[] { "pg_hba.conf", "postgresql.conf" };
-                var localDir = OpenGaussConfDir;
+                var localDir = PostgreSqlConfDir;
 
                 for (int idx = 0; idx < files.Length; idx++)
                 {

@@ -14,7 +14,7 @@ using PackIconKind = MaterialDesignThemes.Wpf.PackIconKind;
 namespace ToolHelper.Views.Database;
 
 /// <summary>
-/// 数据库外挂连接：DBX 下载/管理 + MySQL/postgresql 填参连接（dbx:// 深链唤起，不传密码）。
+/// 数据库外挂连接：DBX 下载/管理 + MySQL/PostgreSQL 填参连接（dbx:// 深链唤起）。
 /// 发布不打包插件，运行时从 GitHub latest release 下载 x64-portable.zip 版。
 /// </summary>
 public class DbxLauncherView : UserControl
@@ -36,13 +36,15 @@ public class DbxLauncherView : UserControl
     private TextBox _hostBox = new();
     private TextBox _portBox = new();
     private TextBox _userBox = new();
+    private PasswordBox _passBox = new();
+    private TextBox _connectionNameBox = new();
     private TextBox _dbNameBox = new();
 
     // 数据库类型：显示名 / dbx type / 默认端口
     private static readonly (string Name, string Type, string Port)[] DbTypes =
     {
         ("MySQL", "mysql", "3306"),
-        ("postgresql", "PostgreSQL", "5432"),
+        ("PostgreSQL", "postgres", "5432"),
     };
 
     public DbxLauncherView()
@@ -202,12 +204,12 @@ public class DbxLauncherView : UserControl
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}";
         if (msg.StartsWith("下载中", StringComparison.Ordinal))
         {
-            var text = _logBox.Text;
+            var text = _logBox.Text.TrimEnd('\r', '\n');
             var idx = text.LastIndexOf('\n');
             var lastLine = idx >= 0 ? text[(idx + 1)..] : text;
             if (lastLine.StartsWith("[") && lastLine.Contains("下载中", StringComparison.Ordinal))
             {
-                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line;
+                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line + "\n";
                 _logBox.ScrollToEnd();
                 return;
             }
@@ -386,6 +388,22 @@ public class DbxLauncherView : UserControl
         Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center
     };
 
+    private PasswordBox MakePasswordBox(string hint, int minWidth = 120)
+    {
+        var pb = new PasswordBox
+        {
+            FontFamily = new FontFamily("Microsoft YaHei"),
+            FontSize = 13,
+            Margin = new Thickness(0, 0, 6, 0),
+            MinWidth = minWidth
+        };
+        var style = TryFindResource("MaterialDesignOutlinedPasswordBox") as Style
+                    ?? TryFindResource("MaterialDesignOutlinedTextBox") as Style;
+        if (style != null) pb.Style = style;
+        MaterialDesignThemes.Wpf.HintAssist.SetHint(pb, hint);
+        return pb;
+    }
+
     /// <summary>
     /// 确保 dbx:// 协议已注册。portable 版 DBX 未启动过时不会注册协议（踩坑 #23 同款问题），
     /// 用本地 DBX.exe 注册 HKCU 用户级协议（无需管理员权限）。
@@ -413,13 +431,15 @@ public class DbxLauncherView : UserControl
         return true;
     }
 
-    // ========== 外挂连接（通过 dbx:// 唤起，密码不传）==========
+    // ========== 外挂连接（通过 dbx:// 唤起）==========
 
     private void LaunchDbxConnection()
     {
         var host = _hostBox.Text.Trim();
         var portText = _portBox.Text.Trim();
         var user = _userBox.Text.Trim();
+        var password = _passBox.Password;
+        var connectionName = _connectionNameBox.Text.Trim();
         var dbName = _dbNameBox.Text.Trim();
         if (string.IsNullOrEmpty(host)) { AppendLog("外挂连接失败：请输入主机"); return; }
         if (_dbTypeCombo.SelectedIndex < 0 || _dbTypeCombo.SelectedIndex >= DbTypes.Length) return;
@@ -433,9 +453,11 @@ public class DbxLauncherView : UserControl
         }
 
         var sb = new StringBuilder("dbx://connection/new?type=").Append(dbType);
+        if (!string.IsNullOrEmpty(connectionName)) sb.Append("&name=").Append(Uri.EscapeDataString(connectionName));
         sb.Append("&host=").Append(Uri.EscapeDataString(host));
         sb.Append("&port=").Append(Uri.EscapeDataString(portText));
         if (!string.IsNullOrEmpty(user)) sb.Append("&user=").Append(Uri.EscapeDataString(user));
+        if (!string.IsNullOrEmpty(password)) sb.Append("&password=").Append(Uri.EscapeDataString(password));
         if (!string.IsNullOrEmpty(dbName)) sb.Append("&database=").Append(Uri.EscapeDataString(dbName));
         sb.Append("&one_time=true");
 
@@ -444,10 +466,11 @@ public class DbxLauncherView : UserControl
         try
         {
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            AppendLog("已唤起 DBX，请在 DBX 中输入密码完成连接");
-            SetStatus("已唤起 DBX，请在 DBX 中输入密码完成连接", true);
+            _passBox.Clear();
+            AppendLog("已唤起 DBX，连接密码已从输入框清除");
+            SetStatus("已唤起 DBX", true);
         }
-        catch (Exception ex)
+        catch (Exception protocolEx)
         {
             // 协议刚注册时系统可能尚未感知，回退：直接用本地 exe 携带 URL 参数启动
             var exe = FindDbxExe();
@@ -456,14 +479,20 @@ public class DbxLauncherView : UserControl
                 try
                 {
                     Process.Start(new ProcessStartInfo { FileName = exe, Arguments = $"\"{url}\"", UseShellExecute = true });
-                    AppendLog("已唤起 DBX，请在 DBX 中输入密码完成连接");
-                    SetStatus("已唤起 DBX，请在 DBX 中输入密码完成连接", true);
+                    _passBox.Clear();
+                    AppendLog("已唤起 DBX，连接密码已从输入框清除");
+                    SetStatus("已唤起 DBX", true);
                     return;
                 }
-                catch (Exception ex2) { AppendLog($"外挂连接失败: {ex2.Message}"); }
+                catch (Exception launchEx)
+                {
+                    AppendLog($"外挂连接失败（{launchEx.GetType().Name}）");
+                    SetStatus("外挂连接失败：无法启动 DBX", false);
+                    return;
+                }
             }
-            AppendLog($"外挂连接失败: {ex.Message}");
-            SetStatus($"外挂连接失败: {ex.Message}", false);
+            AppendLog($"外挂连接失败（{protocolEx.GetType().Name}）");
+            SetStatus("外挂连接失败：无法唤起 DBX", false);
         }
     }
 
@@ -515,8 +544,8 @@ public class DbxLauncherView : UserControl
 
         // 说明卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
         var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
-        cardRows.Children.Add(new TextBlock { Text = "🔗 点击「外挂连接」通过 dbx:// 深链唤起 DBX 并预填连接信息，密码在 DBX 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
-        cardRows.Children.Add(new TextBlock { Text = "📌 类型切换自动填充默认端口；数据库名可选，填写后作为 database 参数预填", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        cardRows.Children.Add(new TextBlock { Text = "🔗 点击「外挂连接」通过 dbx:// 深链唤起 DBX 并预填连接信息（ToolHelper 不保存密码、不写日志）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        cardRows.Children.Add(new TextBlock { Text = "📌 类型切换自动填充默认端口；连接名称和数据库名填写后预填到 DBX", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
         panel.Children.Add(new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
@@ -555,9 +584,15 @@ public class DbxLauncherView : UserControl
         panel.Children.Add(connRow1);
 
         var connRow2 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        connRow2.Children.Add(MakeLabel("连接名称:"));
+        _connectionNameBox = MakeBox("连接名称（可选）", "", 140);
+        connRow2.Children.Add(_connectionNameBox);
         connRow2.Children.Add(MakeLabel("数据库:"));
         _dbNameBox = MakeBox("数据库（可选，外挂连接预填）", "", 140);
         connRow2.Children.Add(_dbNameBox);
+        connRow2.Children.Add(MakeLabel("密码:"));
+        _passBox = MakePasswordBox("密码（仅本次连接）", 140);
+        connRow2.Children.Add(_passBox);
         panel.Children.Add(connRow2);
 
         var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal };

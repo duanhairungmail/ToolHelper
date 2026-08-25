@@ -26,6 +26,7 @@ set "PUBLISH_DIR=%~dp0..\ToolHelper_Publish"
 
 rem 当前项目不再发布代理，清理旧发布目录中的残留文件；保留 data 等用户数据
 if exist "%PUBLISH_DIR%\openGaussProxy" rmdir /s /q "%PUBLISH_DIR%\openGaussProxy"
+if exist "%PUBLISH_DIR%\plugins\opengauss_conf" rmdir /s /q "%PUBLISH_DIR%\plugins\opengauss_conf"
 if exist "%PUBLISH_DIR%\MySqlConnector.dll" del /q "%PUBLISH_DIR%\MySqlConnector.dll"
 if exist "%PUBLISH_DIR%\Npgsql.dll" del /q "%PUBLISH_DIR%\Npgsql.dll"
 if exist "%PUBLISH_DIR%\OpenGauss.NET.dll" del /q "%PUBLISH_DIR%\OpenGauss.NET.dll"

@@ -203,12 +203,12 @@ public class ElectermLauncherView : UserControl
         var line = $"[{DateTime.Now:HH:mm:ss}] {msg}";
         if (msg.StartsWith("下载中", StringComparison.Ordinal))
         {
-            var text = _logBox.Text;
+            var text = _logBox.Text.TrimEnd('\r', '\n');
             var idx = text.LastIndexOf('\n');
             var lastLine = idx >= 0 ? text[(idx + 1)..] : text;
             if (lastLine.StartsWith("[") && lastLine.Contains("下载中", StringComparison.Ordinal))
             {
-                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line;
+                _logBox.Text = (idx >= 0 ? text[..(idx + 1)] : "") + line + "\n";
                 _logBox.ScrollToEnd();
                 return;
             }
