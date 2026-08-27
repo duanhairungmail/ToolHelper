@@ -1,12 +1,13 @@
-using System.IO;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using Microsoft.Web.WebView2.Wpf;
 using MaterialDesignThemes.Wpf;
+using Microsoft.Web.WebView2.Wpf;
 using ToolHelper.Services;
 
 namespace ToolHelper.Views.Other;
@@ -22,18 +23,19 @@ public sealed class NodeRedLauncherView : UserControl
     private readonly TextBox _logBox = new();
     private readonly TextBlock _statusText = new();
     private readonly TextBox _portBox = new() { Text = DefaultPort.ToString(), Width = 70 };
+    private readonly TextBox _targetIpBox = new() { Text = "127.0.0.1", Width = 130 };
     private Button _downloadButton = new();
     private Button _startButton = new();
     private Button _stopButton = new();
     private Button _updateButton = new();
     private Button _deleteButton = new();
+    private Button _clearLogButton = new();
     private bool _built;
     private int _actualPort = DefaultPort;
 
     public NodeRedLauncherView()
     {
         Loaded += OnLoaded;
-        Unloaded += (_, _) => { };
         _manager.OutputReceived += line => Dispatcher.BeginInvoke(() => AppendLog(line));
         _manager.ProcessExited += code => Dispatcher.BeginInvoke(() =>
         {
@@ -67,9 +69,8 @@ public sealed class NodeRedLauncherView : UserControl
 
     private static string? FindFile(string root, string relative)
     {
-        var exact = Path.Combine(root, relative);
-        if (File.Exists(exact)) return exact;
-        return null;
+        var path = Path.Combine(root, relative);
+        return File.Exists(path) ? path : null;
     }
 
     private bool IsInstalled => FindFile(ResolveDir(), Path.Combine("node", "node.exe")) != null
@@ -85,7 +86,7 @@ public sealed class NodeRedLauncherView : UserControl
         _deleteButton.IsEnabled = installed && !_manager.IsRunning;
         if (!installed) SetStatus("未安装（点击下载便携包）", false);
         else if (!_manager.IsRunning) SetStatus("已安装，未启动", false);
-        else SetStatus($"运行中：http://localhost:{_actualPort}", true);
+        else SetStatus($"运行中：http://{_targetIpBox.Text.Trim()}:{_actualPort}", true);
     }
 
     private void BuildUi()
@@ -105,8 +106,12 @@ public sealed class NodeRedLauncherView : UserControl
         _updateButton = MakeButton("更新", CheckUpdate, PackIconKind.Update);
         _deleteButton = MakeButton("删除", Delete, PackIconKind.DeleteOutline);
         foreach (var button in new[] { _downloadButton, _startButton, _stopButton, _updateButton, _deleteButton }) controls.Children.Add(button);
+        controls.Children.Add(new TextBlock { Text = "目标 IP", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
+        controls.Children.Add(_targetIpBox);
         controls.Children.Add(new TextBlock { Text = "端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
         controls.Children.Add(_portBox);
+        _clearLogButton = MakeButton("日志清理", ClearLog, PackIconKind.DeleteSweep);
+        controls.Children.Add(_clearLogButton);
         controls.Children.Add(_statusText);
         _statusText.Margin = new Thickness(12, 0, 0, 0);
         _statusText.VerticalAlignment = VerticalAlignment.Center;
@@ -114,17 +119,21 @@ public sealed class NodeRedLauncherView : UserControl
         DockPanel.SetDock(top, Dock.Top);
         root.Children.Add(top);
 
-        _webView.Visibility = Visibility.Visible;
         _webView.MinHeight = 360;
         root.Children.Add(_webView);
-        var label = new TextBlock { Text = "操作日志", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 3) };
+        var label = new TextBlock { Text = "操作日志", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)), Margin = new Thickness(0, 12, 0, 4) };
         DockPanel.SetDock(label, Dock.Bottom);
         root.Children.Add(label);
-        _logBox.IsReadOnly = true;
         _logBox.AcceptsReturn = true;
-        _logBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-        _logBox.MinHeight = 110;
+        _logBox.IsReadOnly = true;
+        _logBox.TextWrapping = TextWrapping.Wrap;
         _logBox.FontFamily = new FontFamily("Consolas");
+        _logBox.FontSize = 12;
+        _logBox.Background = new SolidColorBrush(Color.FromRgb(40, 44, 52));
+        _logBox.Foreground = new SolidColorBrush(Color.FromRgb(171, 178, 191));
+        _logBox.BorderBrush = new SolidColorBrush(Color.FromRgb(60, 64, 72));
+        _logBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        _logBox.MinHeight = 120;
         DockPanel.SetDock(_logBox, Dock.Bottom);
         root.Children.Add(_logBox);
         Content = root;
@@ -141,22 +150,47 @@ public sealed class NodeRedLauncherView : UserControl
         return button;
     }
 
+    /// <summary>UI 与文件双写；下载进度只替换日志区最后一行。</summary>
     private void AppendLog(string message)
     {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => AppendLog(message));
+            return;
+        }
         var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
+        if (message.StartsWith("下载中", StringComparison.Ordinal))
+        {
+            var text = _logBox.Text.TrimEnd('\r', '\n');
+            var index = text.LastIndexOf('\n');
+            var last = index >= 0 ? text[(index + 1)..] : text;
+            if (last.Contains("下载中", StringComparison.Ordinal))
+            {
+                _logBox.Text = (index >= 0 ? text[..(index + 1)] : string.Empty) + line + Environment.NewLine;
+                _logBox.ScrollToEnd();
+                FileLogger.Write("NodeRed", message);
+                return;
+            }
+        }
         _logBox.AppendText(line + Environment.NewLine);
         _logBox.ScrollToEnd();
         FileLogger.Write("NodeRed", message);
     }
 
+    private void ClearLog()
+    {
+        _logBox.Clear();
+        AppendLog("已清理界面日志（文件日志未删除）");
+    }
+
     private async void Download()
     {
         _downloadButton.IsEnabled = false;
+        AppendLog("开始下载 Node-RED 便携包...");
         try
         {
-            var progress = new Progress<string>(AppendLog);
             var tag = await PluginDownloader.DownloadAsync(RepoOwner, RepoName,
-                name => name.Contains("nodered-portable", StringComparison.OrdinalIgnoreCase), ResolveDir(), progress);
+                name => name.Contains("nodered-portable", StringComparison.OrdinalIgnoreCase), ResolveDir(), new Progress<string>(AppendLog));
             AppendLog($"Node-RED {tag} 下载完成");
         }
         catch (Exception ex) { AppendLog($"下载失败：{ex.Message}"); }
@@ -165,31 +199,71 @@ public sealed class NodeRedLauncherView : UserControl
 
     private async void Start()
     {
-        if (!int.TryParse(_portBox.Text, out var requested) || requested is < 1 or > 65535)
+        if (!IPAddress.TryParse(_targetIpBox.Text.Trim(), out var targetIp))
+        {
+            AppendLog("目标 IP 格式无效，请输入 IPv4 或 IPv6 地址");
+            return;
+        }
+        if (!int.TryParse(_portBox.Text.Trim(), out var requested) || requested is < 1 or > 65535)
         {
             AppendLog("端口必须是 1-65535 的整数");
+            return;
+        }
+        if (!await IsReachableAsync(targetIp))
+        {
+            AppendLog($"目标 IP {targetIp} 不可达，已取消启动");
+            SetStatus("目标 IP 不可达", false);
             return;
         }
         var port = FindFreePort(requested);
         if (port == null) { AppendLog("未找到可用端口"); return; }
         var dir = ResolveDir();
-        var node = FindFile(dir, Path.Combine("node", "node.exe"))!;
-        var red = FindFile(dir, Path.Combine("node_modules", "node-red", "red.js"))!;
+        var node = FindFile(dir, Path.Combine("node", "node.exe"));
+        var red = FindFile(dir, Path.Combine("node_modules", "node-red", "red.js"));
+        if (node == null || red == null) { AppendLog("运行时文件不完整，请重新下载"); return; }
         _actualPort = port.Value;
         _portBox.Text = _actualPort.ToString();
         if (_actualPort != requested) AppendLog($"端口 {requested} 已占用，自动使用 {_actualPort}");
         if (!_manager.Start(node, red, Path.Combine(dir, "data"), _actualPort)) { AppendLog("Node-RED 启动失败"); return; }
-        AppendLog($"Node-RED 已启动，端口 {_actualPort}");
+        var url = $"http://{targetIp}:{_actualPort}";
+        AppendLog($"Node-RED 已启动：{url}");
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            AppendLog("已打开默认浏览器");
+        }
+        catch (Exception ex) { AppendLog($"打开默认浏览器失败：{ex.Message}"); }
         try
         {
             await _webView.EnsureCoreWebView2Async();
-            _webView.CoreWebView2.Navigate($"http://localhost:{_actualPort}");
+            _webView.CoreWebView2.Navigate(url);
         }
-        catch (Exception ex) { AppendLog($"WebView2 初始化失败：{ex.Message}"); }
-        RefreshState();
+        catch (Exception ex) { AppendLog($"WebView2 初始化失败：{ex.Message}"); }        RefreshState();
     }
 
-    private void Stop() { _manager.Stop(); _webView.Source = null; AppendLog("Node-RED 已停止"); RefreshState(); }
+    private async Task<bool> IsReachableAsync(IPAddress address)
+    {
+        if (IPAddress.IsLoopback(address)) return true;
+        try
+        {
+            using var ping = new Ping();
+            var reply = await ping.SendPingAsync(address, 1200);
+            return reply.Status == IPStatus.Success;
+        }
+        catch { return false; }
+    }
+
+    private void Stop()
+    {
+        try
+        {
+            _manager.Stop();
+            _webView.CoreWebView2?.Stop();
+            AppendLog("Node-RED 已停止");
+            RefreshState();
+        }
+        catch (Exception ex) { AppendLog($"停止失败：{ex.Message}"); }
+    }
 
     private async void CheckUpdate()
     {
@@ -236,7 +310,11 @@ public sealed class NodeRedLauncherView : UserControl
         return null;
     }
 
-    private void SetStatus(string text, bool success) { _statusText.Text = text; _statusText.Foreground = success ? Brushes.Green : Brushes.Gray; }
+    private void SetStatus(string text, bool success)
+    {
+        _statusText.Text = text;
+        _statusText.Foreground = success ? Brushes.Green : Brushes.Gray;
+    }
 
     public void SafeDisconnect() => _manager.Stop();
 }

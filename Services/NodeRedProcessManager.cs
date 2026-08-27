@@ -1,14 +1,26 @@
-using System.IO;
 using System.Diagnostics;
+using System.IO;
 
 namespace ToolHelper.Services;
 
 /// <summary>管理本地 Node-RED 进程及其输出。</summary>
 public sealed class NodeRedProcessManager : IDisposable
 {
+    private readonly object _sync = new();
     private Process? _process;
+    private bool _disposed;
 
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning
+    {
+        get
+        {
+            lock (_sync)
+            {
+                try { return _process is { HasExited: false }; }
+                catch { return false; }
+            }
+        }
+    }
 
     public event Action<string>? OutputReceived;
     public event Action<int>? ProcessExited;
@@ -16,8 +28,7 @@ public sealed class NodeRedProcessManager : IDisposable
     public bool Start(string nodeExe, string redJs, string userDir, int port)
     {
         Stop();
-        if (!File.Exists(nodeExe) || !File.Exists(redJs))
-            return false;
+        if (_disposed || !File.Exists(nodeExe) || !File.Exists(redJs)) return false;
 
         Directory.CreateDirectory(userDir);
         var startInfo = new ProcessStartInfo
@@ -36,29 +47,16 @@ public sealed class NodeRedProcessManager : IDisposable
         startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data != null) OutputReceived?.Invoke(e.Data);
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data != null) OutputReceived?.Invoke(e.Data);
-        };
-        process.Exited += (_, _) =>
-        {
-            try { ProcessExited?.Invoke(process.ExitCode); } catch { }
-        };
+        process.OutputDataReceived += OnOutput;
+        process.ErrorDataReceived += OnError;
+        process.Exited += OnExited;
 
         try
         {
-            if (!process.Start())
-            {
-                process.Dispose();
-                return false;
-            }
+            if (!process.Start()) { process.Dispose(); return false; }
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            _process = process;
+            lock (_sync) _process = process;
             return true;
         }
         catch
@@ -68,24 +66,48 @@ public sealed class NodeRedProcessManager : IDisposable
         }
     }
 
+    private void OnOutput(object? sender, DataReceivedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(e.Data)) OutputReceived?.Invoke(e.Data);
+    }
+
+    private void OnError(object? sender, DataReceivedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(e.Data)) OutputReceived?.Invoke(e.Data);
+    }
+
+    private void OnExited(object? sender, EventArgs e)
+    {
+        if (sender is not Process process) return;
+        var code = -1;
+        try { code = process.ExitCode; } catch { }
+        try { ProcessExited?.Invoke(code); } catch { }
+    }
+
+    /// <summary>快速发出终止，不在 UI 线程等待进程退出，避免停止按钮卡顿和事件竞态。</summary>
     public void Stop()
     {
-        var process = Interlocked.Exchange(ref _process, null);
+        Process? process;
+        lock (_sync) process = Interlocked.Exchange(ref _process, null);
         if (process == null) return;
+
         try
         {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(3000);
-            }
+            process.OutputDataReceived -= OnOutput;
+            process.ErrorDataReceived -= OnError;
+            process.Exited -= OnExited;
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
         }
         catch { }
         finally
         {
-            process.Dispose();
+            try { process.Dispose(); } catch { }
         }
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        _disposed = true;
+        Stop();
+    }
 }
