@@ -35,3 +35,6 @@ plugins/dbx/
 .qoder/
 
 plugins/nodered/
+# Node-RED 构建临时目录和便携包（构建脚本位于 build/NodeRed）
+build/NodeRed/.work/
+build/NodeRed/dist/
