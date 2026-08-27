@@ -141,6 +141,12 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Date.DeviceMacView()));
         Categories.Add(apiCat);
 
+        // ===== MQTT测试工具（预留分类，当前承载 Node-RED） =====
+        var mqttCat = new ToolCategory("MQTT测试工具", "Antenna");
+        mqttCat.Tools.Add(new ToolItem("Node-RED 可视化编排", "拖拽编排串口、Modbus、HTTP 等流程",
+            () => new Views.Other.NodeRedLauncherView()));
+        Categories.Add(mqttCat);
+
         // ===== 漏洞检测与系统优化 =====
         var secCat = new ToolCategory("漏洞检测与系统优化", "ShieldAlert");
         secCat.Tools.Add(new ToolItem("Druid漏洞检测",
@@ -170,8 +176,6 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Crypto.AesView()));
         otherCat.Tools.Add(new ToolItem("群 Ping", "批量 ping 多个主机/IP，显示状态、延迟、丢包率，支持网段扫描与导出",
             () => new Views.Other.GroupPingView()));
-        otherCat.Tools.Add(new ToolItem("Node-RED 可视化编排", "拖拽编排串口、Modbus、HTTP 等流程",
-            () => new Views.Other.NodeRedLauncherView()));
         Categories.Add(otherCat);
     }
 }

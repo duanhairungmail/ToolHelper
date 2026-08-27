@@ -22,8 +22,8 @@ public sealed class NodeRedLauncherView : UserControl
     private readonly WebView2 _webView = new();
     private readonly TextBox _logBox = new();
     private readonly TextBlock _statusText = new();
-    private readonly TextBox _portBox = new() { Text = DefaultPort.ToString(), Width = 70 };
-    private readonly TextBox _targetIpBox = new() { Text = "127.0.0.1", Width = 130 };
+    private TextBox _portBox = new();
+    private TextBox _targetIpBox = new();
     private Button _downloadButton = new();
     private Button _startButton = new();
     private Button _stopButton = new();
@@ -99,31 +99,40 @@ public sealed class NodeRedLauncherView : UserControl
         top.Children.Add(title);
         top.Children.Add(new TextBlock { Text = "拖拽编排串口、Modbus、HTTP 等流程；运行时按需下载，无需预装 Node.js。", Opacity = .65, Margin = new Thickness(0, 0, 0, 8) });
 
-        var controls = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 6) };
+        var buttonRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
         _downloadButton = MakeButton("下载", Download, PackIconKind.CloudDownload);
         _startButton = MakeButton("启动", Start, PackIconKind.Play);
         _stopButton = MakeButton("停止", Stop, PackIconKind.Stop);
         _updateButton = MakeButton("更新", CheckUpdate, PackIconKind.Update);
         _deleteButton = MakeButton("删除", Delete, PackIconKind.DeleteOutline);
-        foreach (var button in new[] { _downloadButton, _startButton, _stopButton, _updateButton, _deleteButton }) controls.Children.Add(button);
-        controls.Children.Add(new TextBlock { Text = "目标 IP", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
-        controls.Children.Add(_targetIpBox);
-        controls.Children.Add(new TextBlock { Text = "端口", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 4, 0) });
-        controls.Children.Add(_portBox);
         _clearLogButton = MakeButton("日志清理", ClearLog, PackIconKind.DeleteSweep);
-        controls.Children.Add(_clearLogButton);
-        controls.Children.Add(_statusText);
-        _statusText.Margin = new Thickness(12, 0, 0, 0);
-        _statusText.VerticalAlignment = VerticalAlignment.Center;
-        top.Children.Add(controls);
+        foreach (var button in new[] { _downloadButton, _startButton, _stopButton, _updateButton, _deleteButton, _clearLogButton }) buttonRow.Children.Add(button);
+        top.Children.Add(buttonRow);
+
+        var parameterRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        parameterRow.Children.Add(MakeLabel("目标 IP:"));
+        _targetIpBox = MakeBox("如 127.0.0.1", "127.0.0.1", 180);
+        parameterRow.Children.Add(_targetIpBox);
+        parameterRow.Children.Add(MakeLabel("端口:"));
+        _portBox = MakeBox("端口号", DefaultPort.ToString(), 80);
+        parameterRow.Children.Add(_portBox);
+        top.Children.Add(parameterRow);
         DockPanel.SetDock(top, Dock.Top);
         root.Children.Add(top);
 
         _webView.MinHeight = 360;
         root.Children.Add(_webView);
-        var label = new TextBlock { Text = "操作日志", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)), Margin = new Thickness(0, 12, 0, 4) };
-        DockPanel.SetDock(label, Dock.Bottom);
-        root.Children.Add(label);
+
+        var logPanel = new DockPanel();
+        var logHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 4) };
+        logHeader.Children.Add(new TextBlock { Text = "操作日志", FontSize = 12, FontWeight = FontWeights.SemiBold, Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)), VerticalAlignment = VerticalAlignment.Center });
+        _statusText.Margin = new Thickness(16, 0, 0, 0);
+        _statusText.FontSize = 12;
+        _statusText.VerticalAlignment = VerticalAlignment.Center;
+        logHeader.Children.Add(_statusText);
+        DockPanel.SetDock(logHeader, Dock.Top);
+        logPanel.Children.Add(logHeader);
+
         _logBox.AcceptsReturn = true;
         _logBox.IsReadOnly = true;
         _logBox.TextWrapping = TextWrapping.Wrap;
@@ -134,11 +143,35 @@ public sealed class NodeRedLauncherView : UserControl
         _logBox.BorderBrush = new SolidColorBrush(Color.FromRgb(60, 64, 72));
         _logBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         _logBox.MinHeight = 120;
-        DockPanel.SetDock(_logBox, Dock.Bottom);
-        root.Children.Add(_logBox);
+        logPanel.Children.Add(_logBox);
+        DockPanel.SetDock(logPanel, Dock.Bottom);
+        root.Children.Add(logPanel);
         Content = root;
     }
 
+    private TextBox MakeBox(string hint, string defaultText, int minWidth)
+    {
+        var box = new TextBox
+        {
+            FontFamily = new FontFamily("Microsoft YaHei"),
+            FontSize = 13,
+            Margin = new Thickness(0, 0, 8, 0),
+            MinWidth = minWidth,
+            Text = defaultText
+        };
+        if (TryFindResource("MaterialDesignOutlinedTextBox") is Style style) box.Style = style;
+        HintAssist.SetHint(box, hint);
+        return box;
+    }
+
+    private static TextBlock MakeLabel(string text) => new()
+    {
+        Text = text,
+        FontSize = 12,
+        FontWeight = FontWeights.SemiBold,
+        Margin = new Thickness(0, 0, 6, 0),
+        VerticalAlignment = VerticalAlignment.Center
+    };
     private Button MakeButton(string text, Action action, PackIconKind icon)
     {
         var button = new Button { Margin = new Thickness(0, 0, 6, 0), Style = TryFindResource("MaterialDesignOutlinedButton") as Style };
@@ -238,7 +271,8 @@ public sealed class NodeRedLauncherView : UserControl
             await _webView.EnsureCoreWebView2Async();
             _webView.CoreWebView2.Navigate(url);
         }
-        catch (Exception ex) { AppendLog($"WebView2 初始化失败：{ex.Message}"); }        RefreshState();
+        catch (Exception ex) { AppendLog($"WebView2 初始化失败：{ex.Message}"); }
+        RefreshState();
     }
 
     private async Task<bool> IsReachableAsync(IPAddress address)
