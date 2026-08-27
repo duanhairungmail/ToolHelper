@@ -86,6 +86,8 @@ public partial class MainViewModel : ObservableObject
                 modbus.SafeDisconnect();
             else if (view is Views.Security.KylinOsDeployView kylinDeploy)
                 kylinDeploy.SafeDisconnect();
+            else if (view is Views.Other.NodeRedLauncherView nodeRed)
+                nodeRed.SafeDisconnect();
         }
         _viewCache.Clear();
     }
@@ -168,6 +170,8 @@ public partial class MainViewModel : ObservableObject
             () => new Views.Crypto.AesView()));
         otherCat.Tools.Add(new ToolItem("群 Ping", "批量 ping 多个主机/IP，显示状态、延迟、丢包率，支持网段扫描与导出",
             () => new Views.Other.GroupPingView()));
+        otherCat.Tools.Add(new ToolItem("Node-RED 可视化编排", "拖拽编排串口、Modbus、HTTP 等流程",
+            () => new Views.Other.NodeRedLauncherView()));
         Categories.Add(otherCat);
     }
 }

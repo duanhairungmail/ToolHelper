@@ -2,7 +2,7 @@
 
 基于 **.NET 8 + WPF** 的桌面工具集，面向极早期火灾探测系统的研发与运维场景，将远程连接、数据库管理、接口测试、安全检测、开发辅助等分散工具整合到单一应用中。采用 MVVM 架构 + MaterialDesign 主题，通过分类+搜索导航，新增工具只需注册即可纳入主界面。
 
-## 功能一览（6 分类 12 工具）
+## 功能一览（6 分类 13 工具）
 
 | 分类 | 工具 |
 |------|------|
@@ -17,7 +17,7 @@
 
 - **运行时**：.NET 8.0 Desktop Runtime（Windows）
 - **Access Database Engine（可选）**：读取 Access/Excel 文件（System.Data.OleDb）时需要
-- **联网（可选）**：electerm / DBX 外挂发布包不包含插件本体，首次使用点击「下载插件」时联网从 GitHub 下载便携版到 `plugins/` 下
+- **联网（可选）**：electerm / DBX / Node-RED 外挂发布包不包含插件本体，首次使用点击「下载插件」时联网从 GitHub 下载便携版到 `plugins/` 下
 
 ### Access Database Engine 获取方式
 

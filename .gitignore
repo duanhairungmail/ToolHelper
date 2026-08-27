@@ -33,3 +33,5 @@ plugins/dbx/
 
 # ===== IDE 工具生成 =====
 .qoder/
+
+plugins/nodered/
