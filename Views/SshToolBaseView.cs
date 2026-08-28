@@ -266,6 +266,11 @@ public abstract class SshToolBaseView : UserControl
     protected async void Connect()
     {
         if (_connecting) return;
+        if (Ssh is { IsConnected: true })
+        {
+            SetStatus("SSH 已连接，请先断开后再连接", true);
+            return;
+        }
 
         var host = HostBox.Text.Trim();
         var portText = PortBox.Text.Trim();
@@ -341,7 +346,8 @@ public abstract class SshToolBaseView : UserControl
         finally
         {
             _connecting = false;
-            ConnBtn.IsEnabled = true;
+            // 连接成功后必须先断开才能再次连接；失败时允许重新连接。
+            ConnBtn.IsEnabled = Ssh?.IsConnected != true;
         }
     }
 
@@ -364,6 +370,8 @@ public abstract class SshToolBaseView : UserControl
             Sftp = null;
             ConnStatus.Text = "● 未连接";
             ConnStatus.Foreground = Brushes.Gray;
+            // 只有主动断开或连接失败后才重新启用连接按钮。
+            ConnBtn.IsEnabled = !_connecting;
             DisconnectBtn.IsEnabled = false;
             HostBox.IsEnabled = true;
             PortBox.IsEnabled = true;
