@@ -393,23 +393,23 @@ public abstract class SshToolBaseView : UserControl
         bool connected;
         try { connected = Ssh.IsConnected; } catch { connected = false; }
         if (!connected)
-            ScheduleDisconnect("SSH 连接已断开，请重新连接");
+            ScheduleDisconnect("SSH 连接已断开，请重新连接", Ssh);
     }
 
     private void HandleSshError(SshClient client, SshExceptionEventArgs e)
     {
         if (!ReferenceEquals(Ssh, client) || _disconnecting || !IsConnectionFailure(e.Exception)) return;
-        ScheduleDisconnect($"SSH 连接已断开，请重新连接: {e.Exception.Message}");
+        ScheduleDisconnect($"SSH 连接已断开，请重新连接: {e.Exception.Message}", client);
     }
 
     private static bool IsConnectionFailure(Exception exception) =>
         exception is SshConnectionException or SocketException or IOException or ObjectDisposedException;
 
-    private void ScheduleDisconnect(string message)
+    private void ScheduleDisconnect(string message, SshClient? expectedClient = null)
     {
         void DisconnectOnUiThread()
         {
-            if (_disconnecting || Ssh == null) return;
+            if (_disconnecting || Ssh == null || (expectedClient != null && !ReferenceEquals(Ssh, expectedClient))) return;
             Disconnect();
             SetStatus(message, false);
         }
@@ -430,7 +430,7 @@ public abstract class SshToolBaseView : UserControl
         }
         catch (Exception ex) when (IsConnectionFailure(ex))
         {
-            ScheduleDisconnect("SSH 连接已断开，请重新连接");
+            ScheduleDisconnect("SSH 连接已断开，请重新连接", ssh);
             throw;
         }
     }
