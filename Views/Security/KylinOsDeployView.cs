@@ -833,12 +833,9 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void DoActivationCheck()
     {
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected)
-        {
-            SetStatus("请先连接SSH", false);
-            return;
-        }
+        var ssh = Ssh!;
+        if (!EnsureConnected()) return;
+        ssh = Ssh!;
 
         _activationBtn.IsEnabled = false;
         SetStatus("正在检测激活状态...", true);
@@ -1041,7 +1038,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void ScanFeature1()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (string.IsNullOrWhiteSpace(_desktopUserBox.Text)) { AppendTab1("⚠️ 请先输入桌面登录用户"); SetStatus("请输入桌面登录用户", false); return; }
         _tab1ScanBtn.IsEnabled = false;
         SetStatus("正在扫描功能一...", true);
@@ -1049,7 +1046,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             await Task.Run(() =>
             {
                 var cronServiceActive = RunCommand(ssh, "systemctl is-active cron 2>/dev/null").Trim() == "active";
@@ -1105,7 +1102,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void DeployFeature1()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (Sftp == null || !Sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
 
         var username = _desktopUserBox.Text.Trim();
@@ -1119,7 +1116,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             var sftp = Sftp;
 
             // DM 检测
@@ -1179,7 +1176,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void UninstallFeature1()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (string.IsNullOrWhiteSpace(_desktopUserBox.Text)) { AppendTab1("⚠️ 请先输入桌面登录用户"); SetStatus("请输入桌面登录用户", false); return; }
         if (MessageBox.Show("确认卸载功能一的 5 个文件？", "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
@@ -1194,7 +1191,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             int remaining = 0;
             await Task.Run(() =>
             {
@@ -1256,7 +1253,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void ScanFeature2()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (string.IsNullOrWhiteSpace(_desktopUserBox2.Text)) { AppendTab2("⚠️ 请先输入桌面登录用户"); SetStatus("请输入桌面登录用户", false); return; }
         _tab2ScanBtn.IsEnabled = false;
         SetStatus("正在扫描功能二...", true);
@@ -1264,7 +1261,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             await Task.Run(() =>
             {
                 int deployed = 0;
@@ -1333,7 +1330,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void DeployFeature2()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (Sftp == null || !Sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
 
         var sshUser = UserBox.Text.Trim();
@@ -1345,7 +1342,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             await Task.Run(() =>
             {
                 // Step 1: clean-logs.sh
@@ -1372,7 +1369,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void UninstallFeature2()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (string.IsNullOrWhiteSpace(_desktopUserBox2.Text)) { AppendTab2("⚠️ 请先输入桌面登录用户"); SetStatus("请输入桌面登录用户", false); return; }
         if (MessageBox.Show("确认卸载功能二的 2 个文件？", "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
@@ -1387,7 +1384,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             int remaining = 0;
             await Task.Run(() =>
             {
@@ -1446,14 +1443,14 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void ScanFeature3()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         _tab3ScanBtn.IsEnabled = false;
         SetStatus("正在扫描 VNC Server...", true);
         AppendTab3("\n━━━━ VNC Server：扫描 ━━━━");
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             await Task.Run(() =>
             {
                 var scanCmds = new (string cmd, int idx)[]
@@ -1506,7 +1503,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void DeployFeature3()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (Sftp == null || !Sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
 
         var vncPassword = _vncPasswordBox.Password.Trim();
@@ -1532,7 +1529,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             var sftp = Sftp;
 
             await Task.Run(() =>
@@ -1619,13 +1616,14 @@ public class KylinOsDeployView : SshToolBaseView
 
     private void StartVncServer()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
         var sshUser = UserBox.Text.Trim();
         var sshPass = PassBox.Password;
 
         try
         {
-            var output = RunCommandSudo(Ssh, "systemctl start x11vnc 2>&1", sshUser, sshPass);
+            var output = RunCommandSudo(ssh, "systemctl start x11vnc 2>&1", sshUser, sshPass);
             AppendTab3($"  systemctl start: {(string.IsNullOrWhiteSpace(output) ? "(无输出)" : output.Trim())}");
             _vncServiceRunning = true;
             UpdateTab3Buttons();
@@ -1640,13 +1638,14 @@ public class KylinOsDeployView : SshToolBaseView
 
     private void StopVncServer()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
         var sshUser = UserBox.Text.Trim();
         var sshPass = PassBox.Password;
 
         try
         {
-            var output = RunCommandSudo(Ssh, "systemctl stop x11vnc 2>&1", sshUser, sshPass);
+            var output = RunCommandSudo(ssh, "systemctl stop x11vnc 2>&1", sshUser, sshPass);
             AppendTab3($"  systemctl stop: {(string.IsNullOrWhiteSpace(output) ? "(无输出)" : output.Trim())}");
             _vncServiceRunning = false;
             UpdateTab3Buttons();
@@ -1661,7 +1660,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void UninstallFeature3()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (MessageBox.Show("确认卸载 VNC Server 的 3 个文件？\n\n这将停止服务并删除：\n• /usr/local/bin/x11vnc\n• /etc/x11vnc.passwd\n• /etc/systemd/system/x11vnc.service",
             "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
@@ -1678,7 +1677,7 @@ public class KylinOsDeployView : SshToolBaseView
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             int remaining = 0;
             await Task.Run(() =>
             {
@@ -1837,14 +1836,14 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void ScanFeature4()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         _tab4ScanBtn.IsEnabled = false;
         SetStatus("正在扫描 PostgreSQL 连接配置...", true);
         AppendTab4("\n━━━━ PostgreSQL连接：扫描 ━━━━");
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             await Task.Run(() =>
             {
                 // 检查目标目录是否存在
@@ -1903,7 +1902,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DeployFeature4()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (Sftp == null || !Sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
 
         var sshUser = UserBox.Text.Trim();
@@ -1917,7 +1916,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             var sftp = Sftp;
 
             await Task.Run(() =>
@@ -1993,7 +1992,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void UninstallFeature4()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
         if (MessageBox.Show("确认卸载 PostgreSQL 连接配置？\n\n将恢复原始 pg_hba.conf 和 postgresql.conf", "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
         var sshUser = UserBox.Text.Trim();
@@ -2008,7 +2007,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
         try
         {
-            var ssh = Ssh;
+            var ssh = Ssh!;
             int remaining = 0;
             await Task.Run(() =>
             {
@@ -2065,14 +2064,15 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private void RestartOpenGauss()
     {
-        if (Ssh == null || !Ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
         var sshUser = UserBox.Text.Trim();
         var sshPass = PassBox.Password;
         AppendTab4("\n━━━━ 重启 openGauss 服务 ━━━━");
         try
         {
             // 尝试 gs_ctl reload（不重启，仅重载配置）
-            var output = RunCommandSudo(Ssh, $"su - omm -c 'gs_ctl reload -D {OpenGaussDataDir}' 2>&1", sshUser, sshPass);
+            var output = RunCommandSudo(ssh, $"su - omm -c 'gs_ctl reload -D {OpenGaussDataDir}' 2>&1", sshUser, sshPass);
             AppendTab4($"  gs_ctl reload: {output.Trim()}");
             if (output.Contains("server signaled") || output.Contains("PID"))
             {
@@ -2083,7 +2083,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
             {
                 // 回退：尝试 systemctl restart
                 AppendTab4("  gs_ctl reload 未成功，尝试 systemctl restart...");
-                var output2 = RunCommandSudo(Ssh, "systemctl restart opengauss 2>&1 || systemctl restart gaussdb 2>&1 || echo RESTART_FAILED", sshUser, sshPass);
+                var output2 = RunCommandSudo(ssh, "systemctl restart opengauss 2>&1 || systemctl restart gaussdb 2>&1 || echo RESTART_FAILED", sshUser, sshPass);
                 AppendTab4($"  systemctl: {output2.Trim()}");
                 if (output2.Contains("RESTART_FAILED"))
                 {
@@ -2156,6 +2156,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoVulScan()
     {
+        if (!EnsureConnected()) return;
         _vulScanBtn.IsEnabled = false;
         SetStatus("正在扫描...", true);
         AppendTab6("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -2163,8 +2164,7 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
         try
         {
-            var ssh = Ssh;
-            if (ssh == null || !ssh.IsConnected) throw new InvalidOperationException("SSH 未连接");
+            var ssh = Ssh!;
             DisconnectBtn.IsEnabled = false;
             var result = await Task.Run(() => ScanVulInternal(ssh));
             _vulLastResult = result;
@@ -2261,9 +2261,9 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
     private async void DoVulRepair()
     {
         if (_vulLastResult == null || !_vulLastResult.IsVulnerable) { SetStatus("无需修复", false); return; }
-        var ssh = Ssh;
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
         var sftp = Sftp;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
         if (sftp == null || !sftp.IsConnected) { SetStatus("SFTP 未连接", false); return; }
 
         var patchFile = _vulLastResult.PatchFile;
@@ -2359,13 +2359,13 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoVulVerify()
     {
+        if (!EnsureConnected()) return;
         _vulVerifyBtn.IsEnabled = false;
         SetStatus("正在验证...", true);
         AppendTab6("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         AppendTab6($"[{DateTime.Now:HH:mm:ss}] 开始验证修复结果...");
 
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        var ssh = Ssh!;
         DisconnectBtn.IsEnabled = false;
 
         try
@@ -2438,13 +2438,13 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoOptScan()
     {
+        if (!EnsureConnected()) return;
         _optScanBtn.IsEnabled = false;
         SetStatus("正在扫描...", true);
         AppendTab7("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         AppendTab7($"[{DateTime.Now:HH:mm:ss}] 开始扫描 {_optItems.Count} 项优化项...");
 
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); _optScanBtn.IsEnabled = false; return; }
+        var ssh = Ssh!;
         DisconnectBtn.IsEnabled = false;
 
         // 获取系统信息
@@ -2657,8 +2657,8 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoOptOptimize()
     {
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
 
         var selected = _optItems.Where(i => i.IsSelected && i.Status == "可优化" && !string.IsNullOrEmpty(i.OptimizeCmd)).ToList();
         if (selected.Count == 0) { SetStatus("没有选中可优化的项", false); return; }
@@ -2757,8 +2757,8 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoOptVerify()
     {
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
 
         _optVerifyBtn.IsEnabled = false;
         _optScanBtn.IsEnabled = false;
@@ -2810,8 +2810,8 @@ echo ""[$(date '+%Y-%m-%d %H:%M:%S')] ===== 清理完成，共处理 $CLEAN_COUN
 
     private async void DoOptRestore()
     {
-        var ssh = Ssh;
-        if (ssh == null || !ssh.IsConnected) { SetStatus("SSH 未连接", false); return; }
+        if (!EnsureConnected()) return;
+        var ssh = Ssh!;
 
         var selected = _optItems.Where(i => i.IsSelected && !string.IsNullOrEmpty(i.RestoreCmd)).ToList();
         if (selected.Count == 0) { SetStatus("没有选中可恢复的项", false); return; }

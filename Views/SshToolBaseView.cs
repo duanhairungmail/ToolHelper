@@ -1,12 +1,17 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Net.Sockets;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using MaterialDesignThemes.Wpf;
 using Renci.SshNet;
+using Renci.SshNet.Common;
 using Renci.SshNet.Sftp;
+using SshExceptionEventArgs = Renci.SshNet.Common.ExceptionEventArgs;
 
 namespace ToolHelper.Views;
 
@@ -37,9 +42,15 @@ public abstract class SshToolBaseView : UserControl
     protected virtual bool ShowSharedResultBox => true;
 
     private bool _built;
+    private bool _connecting;
+    private bool _disconnecting;
+    private readonly DispatcherTimer _connectionMonitorTimer;
+    private EventHandler<SshExceptionEventArgs>? _sshErrorHandler;
 
     protected SshToolBaseView()
     {
+        _connectionMonitorTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        _connectionMonitorTimer.Tick += ConnectionMonitorTimerOnTick;
         Loaded += OnLoaded;
     }
 
@@ -254,6 +265,8 @@ public abstract class SshToolBaseView : UserControl
 
     protected async void Connect()
     {
+        if (_connecting) return;
+
         var host = HostBox.Text.Trim();
         var portText = PortBox.Text.Trim();
         var user = UserBox.Text.Trim();
@@ -263,6 +276,7 @@ public abstract class SshToolBaseView : UserControl
         if (!int.TryParse(portText, out int port)) port = 22;
         if (string.IsNullOrEmpty(user)) user = "root";
 
+        _connecting = true;
         ConnBtn.IsEnabled = false;
         SetStatus("正在连接...", true);
 
@@ -275,16 +289,39 @@ public abstract class SshToolBaseView : UserControl
                 var connInfo = new ConnectionInfo(host, port, user, new PasswordAuthenticationMethod(user, pass));
                 connInfo.Timeout = TimeSpan.FromSeconds(30);
 
-                var ssh = new SshClient(connInfo);
-                ssh.Connect();
+                SshClient? ssh = null;
+                SftpClient? sftp = null;
+                try
+                {
+                    ssh = new SshClient(connInfo);
+                    ssh.KeepAliveInterval = TimeSpan.FromSeconds(15);
+                    ssh.Connect();
+                    sftp = new SftpClient(connInfo);
+                    sftp.KeepAliveInterval = TimeSpan.FromSeconds(15);
+                    sftp.Connect();
 
-                var sftp = new SftpClient(connInfo);
-                sftp.Connect();
+                    var probe = ssh.RunCommand("echo CONNECTED");
+                    if (!(probe.Result ?? string.Empty).Contains("CONNECTED", StringComparison.Ordinal))
+                        throw new InvalidOperationException("连接后命令验证失败");
 
-                Ssh = ssh;
-                Sftp = sftp;
+                    Ssh = ssh;
+                    Sftp = sftp;
+                    ssh = null;
+                    sftp = null;
+                }
+                finally
+                {
+                    try { sftp?.Disconnect(); sftp?.Dispose(); } catch { }
+                    try { ssh?.Disconnect(); ssh?.Dispose(); } catch { }
+                }
             });
 
+            var connectedSsh = Ssh;
+            if (connectedSsh == null || !connectedSsh.IsConnected)
+                throw new InvalidOperationException("连接后状态校验失败");
+            _sshErrorHandler = (_, e) => HandleSshError(connectedSsh, e);
+            connectedSsh.ErrorOccurred += _sshErrorHandler;
+            _connectionMonitorTimer.Start();
             ConnStatus.Text = $"● 已连接 {host}";
             ConnStatus.Foreground = Brushes.Green;
             DisconnectBtn.IsEnabled = true;
@@ -298,9 +335,13 @@ public abstract class SshToolBaseView : UserControl
         }
         catch (Exception ex)
         {
-            ConnBtn.IsEnabled = true;
             Disconnect();
             SetStatus($"连接失败: {ex.Message}", false);
+        }
+        finally
+        {
+            _connecting = false;
+            ConnBtn.IsEnabled = true;
         }
     }
 
@@ -308,27 +349,90 @@ public abstract class SshToolBaseView : UserControl
 
     protected void Disconnect()
     {
-        try { Ssh?.Disconnect(); Ssh?.Dispose(); } catch { }
-        try { Sftp?.Disconnect(); Sftp?.Dispose(); } catch { }
-        Ssh = null;
-        Sftp = null;
-        ConnStatus.Text = "● 未连接";
-        ConnStatus.Foreground = Brushes.Gray;
-        ConnBtn.IsEnabled = true;
-        DisconnectBtn.IsEnabled = false;
-        HostBox.IsEnabled = true;
-        PortBox.IsEnabled = true;
-        UserBox.IsEnabled = true;
-        PassBox.IsEnabled = true;
-        OnDisconnected();
-        OnConnStateChanged(false);
+        if (_disconnecting) return;
+        _disconnecting = true;
+        _connectionMonitorTimer.Stop();
+        try
+        {
+            var ssh = Ssh;
+            if (ssh != null && _sshErrorHandler != null)
+                ssh.ErrorOccurred -= _sshErrorHandler;
+            _sshErrorHandler = null;
+            try { ssh?.Disconnect(); ssh?.Dispose(); } catch { }
+            try { Sftp?.Disconnect(); Sftp?.Dispose(); } catch { }
+            Ssh = null;
+            Sftp = null;
+            ConnStatus.Text = "● 未连接";
+            ConnStatus.Foreground = Brushes.Gray;
+            DisconnectBtn.IsEnabled = false;
+            HostBox.IsEnabled = true;
+            PortBox.IsEnabled = true;
+            UserBox.IsEnabled = true;
+            PassBox.IsEnabled = true;
+            OnDisconnected();
+            OnConnStateChanged(false);
+        }
+        finally
+        {
+            _disconnecting = false;
+        }
+    }
+
+    /// <summary>检查 SSH 连接是否仍可用，不可用时立即同步刷新界面状态。</summary>
+    protected bool EnsureConnected()
+    {
+        if (Ssh is { IsConnected: true }) return true;
+        Disconnect();
+        SetStatus("SSH 连接已断开，请重新连接", false);
+        return false;
+    }
+
+    private void ConnectionMonitorTimerOnTick(object? sender, EventArgs e)
+    {
+        if (Ssh == null) return;
+        bool connected;
+        try { connected = Ssh.IsConnected; } catch { connected = false; }
+        if (!connected)
+            ScheduleDisconnect("SSH 连接已断开，请重新连接");
+    }
+
+    private void HandleSshError(SshClient client, SshExceptionEventArgs e)
+    {
+        if (!ReferenceEquals(Ssh, client) || _disconnecting || !IsConnectionFailure(e.Exception)) return;
+        ScheduleDisconnect($"SSH 连接已断开，请重新连接: {e.Exception.Message}");
+    }
+
+    private static bool IsConnectionFailure(Exception exception) =>
+        exception is SshConnectionException or SocketException or IOException or ObjectDisposedException;
+
+    private void ScheduleDisconnect(string message)
+    {
+        void DisconnectOnUiThread()
+        {
+            if (_disconnecting || Ssh == null) return;
+            Disconnect();
+            SetStatus(message, false);
+        }
+
+        if (Dispatcher.CheckAccess())
+            DisconnectOnUiThread();
+        else
+            Dispatcher.BeginInvoke(DisconnectOnUiThread);
     }
 
     protected string RunCommand(SshClient ssh, string cmd)
     {
         if (ssh == null || !ssh.IsConnected) throw new InvalidOperationException("SSH 未连接");
-        var result = ssh.RunCommand(cmd);
-        return (result.Result ?? "") + (result.Error ?? "");
+        try
+        {
+            var result = ssh.RunCommand(cmd);
+            return (result.Result ?? "") + (result.Error ?? "");
+        }
+        catch (Exception ex) when (IsConnectionFailure(ex))
+        {
+            ScheduleDisconnect("SSH 连接已断开，请重新连接");
+            throw;
+        }
     }
 
     protected string RunCommandSudo(SshClient ssh, string cmd, string username, string password)
