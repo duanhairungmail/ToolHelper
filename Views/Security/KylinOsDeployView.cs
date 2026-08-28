@@ -77,42 +77,23 @@ public class KylinOsDeployView : SshToolBaseView
 
     // ===== 顶部功能选择与激活检测 =====
     private ComboBox _featureCombo = new();
-    private Button _activationBtn = new();
+    private Button _activationCheckBtn = new();
+    private PasswordBox _activationSudoPassBox = new();
+    private TextBox _activationLogBox = new();
+    private DialogHost _activationDialogHost = new();
+    private readonly string _activationDialogIdentifier = $"KylinActivation-{Guid.NewGuid():N}";
     private static readonly (string Name, PackIconKind Icon, int TabIndex)[] FeatureMenu =
     {
-        ("定时重启", PackIconKind.ClockOutline, 0),
-        ("日志优化", PackIconKind.DeleteSweep, 1),
-        ("VNC Server", PackIconKind.Monitor, 2),
-        ("PostgreSQL连接", PackIconKind.Database, 3),
-        ("漏洞扫描", PackIconKind.ShieldAlert, 4),
-        ("系统优化", PackIconKind.Flash, 5)
+        ("系统激活", PackIconKind.ShieldKey, 0),
+        ("定时重启", PackIconKind.ClockOutline, 1),
+        ("日志优化", PackIconKind.DeleteSweep, 2),
+        ("VNC Server", PackIconKind.Monitor, 3),
+        ("PostgreSQL连接", PackIconKind.Database, 4),
+        ("漏洞扫描", PackIconKind.ShieldAlert, 5),
+        ("系统优化", PackIconKind.Flash, 6)
     };
 
     private enum ActivationState { Activated, NotActivated, Unknown }
-
-    private const string ActivationProbeCommand = """
-        for t in kylin-activation activate-tool kylin-activate; do
-          p=$(command -v "$t" 2>/dev/null) || continue
-          printf "tool.%s=%s\n" "$t" "$p"
-          for arg in --status --query; do
-            out=$(timeout 8s "$p" "$arg" 2>&1)
-            code=$?
-            out=$(printf "%s" "$out" | tr "\r\n" "  ")
-            name=${arg#--}
-            printf "cli.%s.%s=%s\n" "$t" "$name" "$out"
-            printf "cli.%s.%s.exit=%s\n" "$t" "$name" "$code"
-          done
-        done
-        for f in /etc/kylin-activation/status /etc/.kyinfo; do
-          test -f "$f" || continue
-          out=$(cat "$f" 2>/dev/null | tr "\r\n" "  ")
-          printf "file.%s=%s\n" "$f" "$out"
-        done
-        printf "svc.check.enabled=%s\n" "$(systemctl is-enabled kylin-activation-check.service 2>/dev/null)"
-        printf "svc.check.active=%s\n" "$(systemctl is-active kylin-activation-check.service 2>/dev/null)"
-        os=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d "\"")
-        printf "os.pretty=%s\n" "$os"
-        """;
 
     /// <summary>本地 PostgreSQL 配置目录：从 BaseDirectory 向上逐级查找 plugins/postgresql_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
     private static string PostgreSqlConfDir
@@ -176,18 +157,6 @@ public class KylinOsDeployView : SshToolBaseView
         connBtnRow.Children.Add(_featureCombo);
     }
 
-    protected override void BuildConnRowMiddle(StackPanel connBtnRow)
-    {
-        _activationBtn = MakeButton("激活检测", DoActivationCheck, false, PackIconKind.ShieldKey);
-        _activationBtn.IsEnabled = false;
-        connBtnRow.Children.Add(_activationBtn);
-    }
-
-    protected override void OnConnStateChanged(bool connected)
-    {
-        _activationBtn.IsEnabled = connected;
-    }
-
     protected override void SetStatus(string msg, bool success)
     {
         if (string.IsNullOrWhiteSpace(msg)) return;
@@ -210,6 +179,10 @@ public class KylinOsDeployView : SshToolBaseView
 
         // TabControl（隐藏默认 Tab 标题，由连接行左侧下拉框切换）
         _tabControl.Margin = new Thickness(0, 4, 0, 4);
+
+        var tabActivation = new TabItem { Header = "", Visibility = Visibility.Collapsed };
+        tabActivation.Content = BuildActivationContent();
+        _tabControl.Items.Add(tabActivation);
 
         var tab1 = new TabItem { Header = "", Visibility = Visibility.Collapsed };
         tab1.Content = BuildTab1Content();
@@ -235,12 +208,45 @@ public class KylinOsDeployView : SshToolBaseView
         tab7.Content = BuildTab7Content();
         _tabControl.Items.Add(tab7);
 
-        // TabControl 直接挂到根容器（顶部面板之后 → 成为填充子元素，高度随窗口缩放）
-        root.Children.Add(_tabControl);
+        // DialogHost 只承载当前工具视图，密钥输入时在主界面内显示遮罩层。
+        _activationDialogHost = new DialogHost
+        {
+            Identifier = _activationDialogIdentifier,
+            Content = _tabControl
+        };
+        root.Children.Add(_activationDialogHost);
 
-        // 下拉框早于 TabControl 构建，只能在六个 Tab 就绪后设置默认项。
+        // 下拉框早于 TabControl 构建，只能在七个 Tab 就绪后设置默认项。
         _featureCombo.SelectedIndex = 0;
-        AppendTab1("点击 [连接SSH] 连接到麒麟系统，然后在对应 Tab 中执行扫描/部署/卸载/验证操作。");
+        AppendActivationLog("点击 [连接SSH] 连接到麒麟系统，输入 sudo 密码后点击 [激活检测]。");
+    }
+
+    private DockPanel BuildActivationContent()
+    {
+        var panel = new DockPanel { Margin = new Thickness(8) };
+        var top = new StackPanel();
+
+        _activationSudoPassBox = MakePasswordBox("sudo 密码", 140);
+        top.Children.Add(MakeInfoCard(new[]
+        {
+            "🔑 系统激活状态检测与密钥激活",
+            "📋 通过 sudo kylin_activation_check 检测激活状态",
+            "📋 未激活时可输入密钥（激活命令待目标机实测校准）",
+            "🔐 sudo 密码和激活密钥不会写入日志"
+        }, ("🔐 sudo 密码:", _activationSudoPassBox)));
+
+        var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        _activationCheckBtn = MakeButton("激活检测", DoActivationCheck, true, PackIconKind.ShieldKey);
+        _activationCheckBtn.IsEnabled = false;
+        actionRow.Children.Add(_activationCheckBtn);
+        actionRow.Children.Add(MakeButton("日志清理", () => _activationLogBox.Clear(), false, PackIconKind.NotificationClearAll));
+        actionRow.Children.Add(MakeButton("复制结果", () => CopyTabLog(_activationLogBox), false, PackIconKind.ContentCopy));
+        top.Children.Add(actionRow);
+
+        DockPanel.SetDock(top, Dock.Top);
+        panel.Children.Add(top);
+        panel.Children.Add(BuildTabLogPanel(ref _activationLogBox));
+        return panel;
     }
 
     private DockPanel BuildTab1Content()
@@ -256,7 +262,7 @@ public class KylinOsDeployView : SshToolBaseView
             "🔐 仅该次重启免密登录桌面，其余所有重启必须输入密码",
             "📁 部署 5 个文件（脚本/cron/sudoers/XDG自启动）"
         },
-        "👤 桌面登录用户:", _desktopUserBox));
+        ("👤 桌面登录用户:", _desktopUserBox)));
 
         // DataGrid
         _tab1Dg = BuildItemGrid(_tab1Items);
@@ -302,7 +308,7 @@ public class KylinOsDeployView : SshToolBaseView
             "🗑️ 删除 >365 天的 /var/log 日志和 /tmp 临时文件",
             "📋 journal 保留 30 天，超大日志(>500MB) truncate 清空"
         },
-        "👤 桌面登录用户:", _desktopUserBox2));
+        ("👤 桌面登录用户:", _desktopUserBox2)));
 
         // DataGrid
         _tab2Dg = BuildItemGrid(_tab2Items);
@@ -340,24 +346,15 @@ public class KylinOsDeployView : SshToolBaseView
         var panel = new DockPanel { Margin = new Thickness(8) };
         var top = new StackPanel();
 
-        // 信息卡片
+        // 信息卡片：VNC 密码与端口统一放入蓝色卡片。
+        _vncPasswordBox = MakePasswordBox("至少6位", 120);
+        _vncPortBox = MakeBox("端口", "5901", 70);
         top.Children.Add(MakeInfoCard(new[]
         {
             "🖥️ 部署 x11vnc 到麒麟系统，共享真实桌面供远程 VNC 连接",
             "🔐 使用 VNC 密码认证，监听端口可自定义",
             "📁 部署 3 个文件（二进制 / 密码文件 / systemd 服务）"
-        }));
-
-        // 配置行：VNC 密码 + 随机生成 + 端口
-        var configRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-        configRow.Children.Add(new TextBlock { Text = "VNC 密码:", FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-        _vncPasswordBox = MakePasswordBox("至少6位", 120);
-        configRow.Children.Add(_vncPasswordBox);
-        configRow.Children.Add(MakeButton("随机生成", GenerateRandomPassword, false, PackIconKind.Refresh));
-        configRow.Children.Add(new TextBlock { Text = "端口:", FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 6, 0) });
-        _vncPortBox = MakeBox("端口", "5901", 70);
-        configRow.Children.Add(_vncPortBox);
-        top.Children.Add(configRow);
+        }, ("🔐 VNC 密码:", _vncPasswordBox), ("端口:", _vncPortBox)));
 
         // DataGrid
         _tab3Dg = BuildItemGrid(_tab3Items);
@@ -512,7 +509,16 @@ public class KylinOsDeployView : SshToolBaseView
         infoBox.Children.Add(_optSystemInfoText);
         infoBox.Children.Add(_optInfoText);
         infoBox.Children.Add(new TextBlock { Text = "风险提示: mask 为不可逆级停用（可用 [恢复选中] 还原），中风险项请根据业务需求谨慎选择", FontSize = 11, Foreground = Brushes.Orange, Margin = new Thickness(0, 2, 0, 0) });
-        top.Children.Add(infoBox);
+        top.Children.Add(new WpfBorder
+        {
+            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(4),
+            Margin = new Thickness(0, 0, 0, 8),
+            Child = infoBox
+        });
 
         // DataGrid
         _optDataGrid.ItemsSource = _optItems;
@@ -658,15 +664,26 @@ public class KylinOsDeployView : SshToolBaseView
     private void AppendTab4(string text) { _tab4Log.AppendText(text + "\n"); _tab4Log.ScrollToEnd(); }
     private void AppendTab6(string text) { _vulLogBox.AppendText(text + "\n"); _vulLogBox.ScrollToEnd(); }
     private void AppendTab7(string text) { _optLogBox.AppendText(text + "\n"); _optLogBox.ScrollToEnd(); }
+    private void AppendActivationLog(string text)
+    {
+        if (!_activationLogBox.Dispatcher.CheckAccess())
+        {
+            _activationLogBox.Dispatcher.Invoke(() => AppendActivationLog(text));
+            return;
+        }
+        _activationLogBox.AppendText(text + "\n");
+        _activationLogBox.ScrollToEnd();
+    }
 
     private TextBox? CurrentTabLogBox() => _tabControl.SelectedIndex switch
     {
-        0 => _tab1Log,
-        1 => _tab2Log,
-        2 => _tab3Log,
-        3 => _tab4Log,
-        4 => _vulLogBox,
-        5 => _optLogBox,
+        0 => _activationLogBox,
+        1 => _tab1Log,
+        2 => _tab2Log,
+        3 => _tab3Log,
+        4 => _tab4Log,
+        5 => _vulLogBox,
+        6 => _optLogBox,
         _ => null
     };
 
@@ -710,30 +727,17 @@ public class KylinOsDeployView : SshToolBaseView
         Dispatcher.BeginInvoke(() => AppendTab3(text));
     }
 
-    /// <summary>生成 8 位随机 VNC 密码（不含易混淆字符），写入密码框并展示在日志区便于复制</summary>
-    private void GenerateRandomPassword()
-    {
-        const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-        var sb = new StringBuilder(8);
-        var rng = new Random();
-        for (int i = 0; i < 8; i++)
-            sb.Append(chars[rng.Next(chars.Length)]);
-        var pwd = sb.ToString();
-        _vncPasswordBox.Password = pwd;
-        AppendTab3($"  🔑 已生成随机 VNC 密码: {pwd}（已填入密码框，请复制保存）");
-    }
-
-    private WpfBorder MakeInfoCard(string[] lines, string? inputLabel = null, TextBox? inputBox = null)
+    private WpfBorder MakeInfoCard(string[] lines, params (string Label, FrameworkElement Control)[] controls)
     {
         var sp = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
         foreach (var line in lines)
             sp.Children.Add(new TextBlock { Text = line, FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
 
-        if (inputLabel != null && inputBox != null)
+        foreach (var (label, control) in controls)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
-            row.Children.Add(new TextBlock { Text = inputLabel, FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
-            row.Children.Add(inputBox);
+            row.Children.Add(new TextBlock { Text = label, FontSize = 12, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(control);
             sp.Children.Add(row);
         }
 
@@ -813,6 +817,7 @@ public class KylinOsDeployView : SshToolBaseView
 
     protected override void OnConnected()
     {
+        _activationCheckBtn.IsEnabled = true;
         _tab1ScanBtn.IsEnabled = true;
         _tab2ScanBtn.IsEnabled = true;
         _tab3ScanBtn.IsEnabled = true;
@@ -831,87 +836,66 @@ public class KylinOsDeployView : SshToolBaseView
 
     private async void DoActivationCheck()
     {
-        var ssh = Ssh!;
         if (!EnsureConnected()) return;
-        ssh = Ssh!;
+        var sshUser = string.IsNullOrWhiteSpace(UserBox.Text) ? "root" : UserBox.Text.Trim();
+        var sudoPassword = _activationSudoPassBox.Password;
+        if (!sshUser.Equals("root", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(sudoPassword))
+        {
+            SetStatus("请输入 sudo 密码", false);
+            return;
+        }
 
-        _activationBtn.IsEnabled = false;
+        _activationCheckBtn.IsEnabled = false;
         SetStatus("正在检测激活状态...", true);
+        AppendActivationLog("\n━━━━ 激活检测 ━━━━");
         try
         {
-            // 探测脚本通过 SFTP 上传后执行，避免多行 RunCommand 在远端 shell 中产生换行污染。
-            var raw = await Task.Run(() => RunScriptViaSftp(ActivationProbeCommand));
-            var (state, detail) = ParseActivationResult(raw);
+            var raw = await Task.Run(() => RunCommandSudo(Ssh!, "kylin_activation_check 2>&1", sshUser, sudoPassword));
+            var (state, detail) = ParseActivationOutput(raw);
+            AppendActivationLog($"检测输出:\n{raw.Trim()}");
             SetStatus(state switch
             {
                 ActivationState.Activated => "检测结果: 已激活",
                 ActivationState.NotActivated => "检测结果: 未激活",
                 _ => "检测结果: 无法判定"
             }, state == ActivationState.Activated);
-            ShowActivationDialog(state, detail, raw);
+            await ShowActivationDialog(state, detail, raw);
         }
         catch (Exception ex)
         {
+            AppendActivationLog($"❌ 激活检测失败: {ex.Message}");
             SetStatus($"激活检测失败: {ex.Message}", false);
         }
         finally
         {
-            _activationBtn.IsEnabled = Ssh?.IsConnected == true;
+            _activationCheckBtn.IsEnabled = Ssh?.IsConnected == true;
         }
     }
 
-    private static (ActivationState State, string Detail) ParseActivationResult(string raw)
+    private static (ActivationState State, string Detail) ParseActivationOutput(string raw)
     {
-        var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var separator = line.IndexOf('=');
-            if (separator <= 0) continue;
-            labels[line[..separator].Trim()] = line[(separator + 1)..].Trim('\r', ' ');
-        }
+        var lines = raw.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
 
-        var state = ActivationState.Unknown;
-        var evidence = "未发现可识别的激活状态字段";
-        foreach (var pair in labels)
-        {
-            if (!pair.Key.StartsWith("cli.", StringComparison.OrdinalIgnoreCase) ||
-                pair.Key.EndsWith(".exit", StringComparison.OrdinalIgnoreCase) ||
-                labels.GetValueOrDefault(pair.Key + ".exit") != "0")
-                continue;
+        // 必须先判定未激活，避免“系统未被激活”被“系统激活”子串误判。
+        var notActivatedLine = lines.FirstOrDefault(line =>
+            line.Contains("系统未被激活", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("系统未激活", StringComparison.OrdinalIgnoreCase));
+        if (notActivatedLine != null)
+            return (ActivationState.NotActivated, $"判定依据: {notActivatedLine}");
 
-            state = ReadActivationSignal(pair.Value);
-            if (state == ActivationState.Unknown) continue;
-            evidence = $"{pair.Key}: {pair.Value}";
-            break;
-        }
+        var activatedLine = lines.FirstOrDefault(line =>
+            line.Equals("系统激活", StringComparison.OrdinalIgnoreCase) ||
+            line.Contains("系统已激活", StringComparison.OrdinalIgnoreCase));
+        if (activatedLine != null)
+            return (ActivationState.Activated, $"判定依据: {activatedLine}");
 
-        if (state == ActivationState.Unknown)
-        {
-            foreach (var pair in labels.Where(p => p.Key.StartsWith("file.", StringComparison.OrdinalIgnoreCase)))
-            {
-                state = ReadActivationSignal(pair.Value);
-                if (state == ActivationState.Unknown) continue;
-                evidence = $"{pair.Key}: {pair.Value}";
-                break;
-            }
-        }
-
-        var system = labels.GetValueOrDefault("os.pretty", "未知");
-        var service = $"{labels.GetValueOrDefault("svc.check.active", "未知")}/{labels.GetValueOrDefault("svc.check.enabled", "未知")}";
-        return (state, $"系统: {system}\n判定依据: {evidence}\n激活检查服务(active/enabled): {service}");
+        return (ActivationState.Unknown, "判定依据: 未发现可识别的激活状态字段");
     }
 
-    private static ActivationState ReadActivationSignal(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-        var negative = new[] { "未激活", "not activated", "not_activated", "unactivated", "试用" };
-        if (negative.Any(normalized.Contains)) return ActivationState.NotActivated;
-
-        var positive = new[] { "已激活", "status=activated", "state=activated", "activation_status=activated" };
-        return positive.Any(normalized.Contains) ? ActivationState.Activated : ActivationState.Unknown;
-    }
-
-    private void ShowActivationDialog(ActivationState state, string detail, string raw)
+    private async Task ShowActivationDialog(ActivationState state, string detail, string raw)
     {
         if (state == ActivationState.Activated)
         {
@@ -925,8 +909,10 @@ public class KylinOsDeployView : SshToolBaseView
                 MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (activate == MessageBoxResult.Yes)
             {
-                AppendCurrentTabLog("❌ 当前目标版本的密钥激活命令尚未校准，未执行特权操作。");
-                MessageBox.Show("当前目标版本的密钥激活命令尚未完成真机校准，无法安全执行自动激活。",
+                var key = await ShowKeyInputDialog();
+                if (string.IsNullOrWhiteSpace(key)) return;
+                AppendActivationLog("❌ 当前目标版本的密钥激活命令尚未校准，未执行特权操作。");
+                MessageBox.Show("已接收激活密钥，但当前目标版本的激活命令尚未完成真机校准，未执行任何特权操作。",
                     "暂不支持自动激活", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             return;
@@ -936,10 +922,37 @@ public class KylinOsDeployView : SshToolBaseView
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    /// <summary>使用 MaterialDesign DialogHost 收集掩码激活密钥；密钥只在本地变量中短暂存在。</summary>
+    private async Task<string?> ShowKeyInputDialog()
+    {
+        var keyBox = MakePasswordBox("激活密钥", 260);
+        var panel = new StackPanel { Margin = new Thickness(8) };
+        panel.Children.Add(new TextBlock { Text = "请输入系统激活密钥：", FontSize = 13, Margin = new Thickness(0, 0, 0, 10) });
+        panel.Children.Add(keyBox);
+
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 14, 0, 0)
+        };
+        var cancel = MakeButton("取消", () => DialogHost.Close(_activationDialogIdentifier, false), false, PackIconKind.CloseCircle);
+        var confirm = MakeButton("激活", () => DialogHost.Close(_activationDialogIdentifier, true), true, PackIconKind.Key);
+        row.Children.Add(cancel);
+        row.Children.Add(confirm);
+        panel.Children.Add(row);
+
+        var result = await DialogHost.Show(panel, _activationDialogIdentifier);
+        return result is bool confirmed && confirmed && !string.IsNullOrWhiteSpace(keyBox.Password)
+            ? keyBox.Password
+            : null;
+    }
+
     #endregion
 
     private void DisableAllButtons()
     {
+        _activationCheckBtn.IsEnabled = false;
         _tab1ScanBtn.IsEnabled = _tab1DeployBtn.IsEnabled = _tab1UninstallBtn.IsEnabled = _tab1VerifyBtn.IsEnabled = false;
         _tab2ScanBtn.IsEnabled = _tab2DeployBtn.IsEnabled = _tab2UninstallBtn.IsEnabled = _tab2VerifyBtn.IsEnabled = false;
         _tab3ScanBtn.IsEnabled = _tab3DeployBtn.IsEnabled = _tab3StartBtn.IsEnabled = _tab3StopBtn.IsEnabled = _tab3UninstallBtn.IsEnabled = false;
@@ -1023,27 +1036,6 @@ public class KylinOsDeployView : SshToolBaseView
             Sftp!.UploadFile(ms, tmpFile, true);
         // install 同时设置系统文件属主和权限，避免 cron 拒绝非 root 属主的任务文件。
         RunCommandSudo(Ssh!, $"install -o root -g root -m {mode} {tmpFile} {remotePath} && rm -f {tmpFile}", username, password);
-    }
-
-    /// <summary>
-    /// 通过 SFTP 上传临时脚本并在远端执行，避免多行 RunCommand 的换行污染。
-    /// 探测脚本为只读操作，无需 root 权限，执行后始终尝试清理临时文件。
-    /// </summary>
-    private string RunScriptViaSftp(string scriptContent)
-    {
-        var tmpFile = $"/tmp/toolhelper_probe_{Guid.NewGuid():N}.sh";
-        var normalizedScript = scriptContent.Replace("\r\n", "\n").Replace("\r", "\n");
-        using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(normalizedScript)))
-            Sftp!.UploadFile(ms, tmpFile, true);
-
-        try
-        {
-            return RunCommand(Ssh!, $"sh {tmpFile} 2>&1");
-        }
-        finally
-        {
-            try { RunCommand(Ssh!, $"rm -f {tmpFile}"); } catch { }
-        }
     }
 
     private void EnsureCronService(SshClient ssh, string username, string password)
