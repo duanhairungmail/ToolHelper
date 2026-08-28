@@ -91,7 +91,6 @@ public class KylinOsDeployView : SshToolBaseView
     private enum ActivationState { Activated, NotActivated, Unknown }
 
     private const string ActivationProbeCommand = """
-        sh -c '
         for t in kylin-activation activate-tool kylin-activate; do
           p=$(command -v "$t" 2>/dev/null) || continue
           printf "tool.%s=%s\n" "$t" "$p"
@@ -113,7 +112,6 @@ public class KylinOsDeployView : SshToolBaseView
         printf "svc.check.active=%s\n" "$(systemctl is-active kylin-activation-check.service 2>/dev/null)"
         os=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d "\"")
         printf "os.pretty=%s\n" "$os"
-        '
         """;
 
     /// <summary>本地 PostgreSQL 配置目录：从 BaseDirectory 向上逐级查找 plugins/postgresql_conf（与 KylinOsScanView.PatchDir 同策略）</summary>
@@ -841,7 +839,8 @@ public class KylinOsDeployView : SshToolBaseView
         SetStatus("正在检测激活状态...", true);
         try
         {
-            var raw = await Task.Run(() => RunCommand(ssh, ActivationProbeCommand));
+            // 探测脚本通过 SFTP 上传后执行，避免多行 RunCommand 在远端 shell 中产生换行污染。
+            var raw = await Task.Run(() => RunScriptViaSftp(ActivationProbeCommand));
             var (state, detail) = ParseActivationResult(raw);
             SetStatus(state switch
             {
@@ -1024,6 +1023,27 @@ public class KylinOsDeployView : SshToolBaseView
             Sftp!.UploadFile(ms, tmpFile, true);
         // install 同时设置系统文件属主和权限，避免 cron 拒绝非 root 属主的任务文件。
         RunCommandSudo(Ssh!, $"install -o root -g root -m {mode} {tmpFile} {remotePath} && rm -f {tmpFile}", username, password);
+    }
+
+    /// <summary>
+    /// 通过 SFTP 上传临时脚本并在远端执行，避免多行 RunCommand 的换行污染。
+    /// 探测脚本为只读操作，无需 root 权限，执行后始终尝试清理临时文件。
+    /// </summary>
+    private string RunScriptViaSftp(string scriptContent)
+    {
+        var tmpFile = $"/tmp/toolhelper_probe_{Guid.NewGuid():N}.sh";
+        var normalizedScript = scriptContent.Replace("\r\n", "\n").Replace("\r", "\n");
+        using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(normalizedScript)))
+            Sftp!.UploadFile(ms, tmpFile, true);
+
+        try
+        {
+            return RunCommand(Ssh!, $"sh {tmpFile} 2>&1");
+        }
+        finally
+        {
+            try { RunCommand(Ssh!, $"rm -f {tmpFile}"); } catch { }
+        }
     }
 
     private void EnsureCronService(SshClient ssh, string username, string password)
