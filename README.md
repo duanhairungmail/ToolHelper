@@ -7,10 +7,10 @@
 | 分类 | 工具 |
 |------|------|
 | 远程连接工具 | 远程外挂连接（electerm：SSH/SFTP/RDP/VNC 深链唤起，按需下载） |
-| 数据库连接工具 | 数据库外挂连接（DBX：MySQL/postgresql 填参与深链唤起，按需下载） |
+| 数据库连接工具 | 数据库外挂连接（DBX：MySQL/PostgreSQL 填参与深链唤起，按需下载） |
 | 接口测试工具 | 极早期接口验证（登录 + 设备ID/MQTT主题 + 16接口批量验证 + cron 自动检测）、获取设备MAC地址 |
-| MQTT测试工具 | Node-RED 可视化编排（串口、Modbus、HTTP 流程） |
-| 漏洞检测与系统优化 | Druid 漏洞检测（HTTP 扫描，xlsx/docx 报告导出）、KylinOS 运维策略（6 Tab：定时重启/日志优化/VNC Server/PostgreSQL/漏洞扫描/系统优化） |
+| MQTT测试工具 | Node-RED 可视化编排（串口、Modbus、HTTP 流程；自动探测空闲端口、目标 IP 校验、浏览器/WebView2 同步打开） |
+| 漏洞检测与系统优化 | Druid 漏洞检测（HTTP 扫描，xlsx/docx 报告导出）、KylinOS 运维策略（7 项功能：系统激活/定时重启/日志优化/VNC Server/PostgreSQL/漏洞扫描/系统优化） |
 | 串口调试工具 | 基本串口调试、极早期 Modbus 调试（申弘/南瑞怡和双协议） |
 | 其他工具 | Cron 表达式、SQL语句生成与格式化（五模式表单生成 + 关键字美化）、AES 加密/解密、群 Ping（CIDR 网段扫描/并发 ping/CSV+Excel 导出） |
 
@@ -35,11 +35,18 @@
 # 开发调试
 dotnet run --project ToolHelper.csproj
 
+# Release 构建
+dotnet build ToolHelper.csproj -c Release --nologo
+
 # 发布（输出到 ..\ToolHelper_Publish，发布前自动终止运行中的实例）
 .\发布工具.bat
 ```
 
 或直接双击仓库根目录的 `启动工具.bat` / `发布工具.bat`。
+
+### Node-RED 便携包构建
+
+Node-RED 便携运行时由 [build/NodeRed/build-nodered-portable.ps1](build/NodeRed/build-nodered-portable.ps1) 构建，默认包含 Node.js、Node-RED、串口节点和 Modbus 节点。使用 `-PublishRelease` 可生成并发布 Release 资产；ToolHelper 首次使用时从公开仓库 [duanhairungmail/ToolHelper_nodered](https://github.com/duanhairungmail/ToolHelper_nodered) 按需下载到 `plugins/nodered/`。
 
 ## 项目结构
 
@@ -47,9 +54,10 @@ dotnet run --project ToolHelper.csproj
 ToolHelper/
 ├── ViewModels/          # MainViewModel（工具注册/分类/搜索过滤），ToolCategory/ToolItem
 ├── Views/               # 各工具视图（按功能域分目录），基类 StandardToolView / SshToolBaseView
-├── Services/            # FileLogger（按天分文件日志）、PluginDownloader（外挂下载）
+├── Services/            # FileLogger（按天分文件日志）、PluginDownloader（外挂下载）、NodeRedProcessManager
+├── build/NodeRed/       # Node-RED 便携包构建脚本与说明
 ├── Resources/           # 图标、x11vnc 静态二进制（KylinOS VNC Server 部署用）
-└── plugins/             # 随发布复制的 KylinOS 资产；electerm/dbx 按需下载
+└── plugins/             # 随发布复制的 KylinOS 配置/补丁；electerm/dbx/nodered 按需下载
 ```
 
 ## 技术栈
