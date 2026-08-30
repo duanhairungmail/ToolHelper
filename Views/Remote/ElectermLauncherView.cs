@@ -25,9 +25,6 @@ public class ElectermLauncherView : UserControl
     private Button _downloadBtn = new();
     private Button _deleteBtn = new();
     private Button _updateBtn = new();
-    private TabControl _tabControl = new();
-    private Button _tabManageBtn = new();
-    private Button _tabConnectBtn = new();
     private TextBlock _statusText = new();
     private bool _built;
 
@@ -126,6 +123,11 @@ public class ElectermLauncherView : UserControl
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
         titleRow.Children.Add(new PackIcon { Kind = PackIconKind.Terminal, Width = 28, Height = 28, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
         titleRow.Children.Add(new TextBlock { Text = "  远程外挂连接", FontSize = 20, FontWeight = FontWeights.Bold, Foreground = titleBrush, VerticalAlignment = VerticalAlignment.Center });
+        // 状态文本与标题同行显示。
+        _statusText.VerticalAlignment = VerticalAlignment.Center;
+        _statusText.Margin = new Thickness(20, 0, 0, 0);
+        _statusText.FontSize = 13;
+        titleRow.Children.Add(_statusText);
         top.Children.Add(titleRow);
 
         top.Children.Add(new TextBlock
@@ -134,28 +136,11 @@ public class ElectermLauncherView : UserControl
             FontSize = 13, Opacity = 0.6, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12)
         });
 
-        // ── Tab 切换按钮行（与 KylinOS 运维策略同款：隐藏 Tab 标题，由上方按钮切换）──
-        var tabBtnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-        _tabManageBtn = MakeButton("插件管理", () => SwitchTab(0), false, PackIconKind.PackageVariant);
-        tabBtnRow.Children.Add(_tabManageBtn);
-        _tabConnectBtn = MakeButton("外挂连接", () => SwitchTab(1), false, PackIconKind.LinkVariant);
-        tabBtnRow.Children.Add(_tabConnectBtn);
-        _statusText.VerticalAlignment = VerticalAlignment.Center;
-        _statusText.Margin = new Thickness(16, 0, 0, 0);
-        _statusText.FontSize = 13;
-        tabBtnRow.Children.Add(_statusText);
-        top.Children.Add(tabBtnRow);
-
-        // ── TabControl（固定高度保证两个 Tab 排版一致）──
-        _tabControl = new TabControl { Background = Brushes.Transparent, BorderThickness = new Thickness(0), Height = 230 };
-        var tabManage = new TabItem { Header = "", Visibility = Visibility.Collapsed };
-        tabManage.Content = BuildManageTab();
-        _tabControl.Items.Add(tabManage);
-        var tabConnect = new TabItem { Header = "", Visibility = Visibility.Collapsed };
-        tabConnect.Content = BuildConnectTab();
-        _tabControl.Items.Add(tabConnect);
-        top.Children.Add(_tabControl);
-        SwitchTab(0);
+        top.Children.Add(BuildInfoCard());
+        var splitPanel = new StackPanel();
+        splitPanel.Children.Add(BuildManagePanel());
+        splitPanel.Children.Add(BuildConnectPanel());
+        top.Children.Add(splitPanel);
 
         DockPanel.SetDock(top, Dock.Top);
         root.Children.Add(top);
@@ -189,7 +174,30 @@ public class ElectermLauncherView : UserControl
 
         Content = root;
         RefreshPluginState();
-        AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装") + "；「外挂连接」Tab 可填参唤起 electerm");
+        AppendLog("视图已就绪，插件状态：" + (_launchBtn.IsEnabled ? "已安装" : "未安装") + "；可直接管理插件或填写参数唤起 electerm");
+    }
+
+    private Border BuildInfoCard()
+    {
+        var rows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
+        var stateRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
+        stateRow.Children.Add(new TextBlock { Text = "📦 插件状态：", FontSize = 12, FontWeight = FontWeights.SemiBold });
+        _statusInfoText.FontSize = 12;
+        _statusInfoText.TextWrapping = TextWrapping.Wrap;
+        stateRow.Children.Add(_statusInfoText);
+        rows.Children.Add(stateRow);
+        rows.Children.Add(new TextBlock { Text = "📁 存放目录：plugins\\electerm\\（按需下载，发布包不预置）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        rows.Children.Add(new TextBlock { Text = "📜 许可证：MIT（终端 + SSH + SFTP + 串口 + RDP/VNC 客户端）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        rows.Children.Add(new Separator { Margin = new Thickness(0, 6, 0, 6) });
+        rows.Children.Add(new TextBlock { Text = "🔗 SSH/RDP/VNC 通过 electerm:// 唤起；SFTP 使用 --sftp-only，只显示 SFTP 面板，密码在 electerm 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        rows.Children.Add(new TextBlock { Text = "📌 协议切换自动填充默认端口（SSH/SFTP 22、RDP 3389、VNC 5900）；用户名可选", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
+        return new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
+            BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(4), Margin = new Thickness(0, 0, 0, 8), Child = rows
+        };
     }
 
     /// <summary>日志写入：进度类消息替换末行，避免逐 MB 刷屏。</summary>
@@ -505,33 +513,11 @@ public class ElectermLauncherView : UserControl
         }
     }
 
-    /// <summary>Tab1 插件管理：KylinOS 同款信息卡片 + 插件按钮行</summary>
-    private StackPanel BuildManageTab()
+    /// <summary>插件管理按钮区。</summary>
+    private StackPanel BuildManagePanel()
     {
         var panel = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
-
-        // 信息卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
-        var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
-        var stateRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 1, 0, 1) };
-        stateRow.Children.Add(new TextBlock { Text = "📦 插件状态：", FontSize = 12, FontWeight = FontWeights.SemiBold });
-        _statusInfoText.FontSize = 12;
-        _statusInfoText.TextWrapping = TextWrapping.Wrap;
-        stateRow.Children.Add(_statusInfoText);
-        cardRows.Children.Add(stateRow);
-        cardRows.Children.Add(new TextBlock { Text = "📁 存放目录：plugins\\electerm\\（按需下载，发布包不预置）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
-        cardRows.Children.Add(new TextBlock { Text = "📜 许可证：MIT（终端 + SSH + SFTP + 串口 + RDP/VNC 客户端）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
-        panel.Children.Add(new Border
-        {
-            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(4),
-            Margin = new Thickness(0, 0, 0, 8),
-            Child = cardRows
-        });
-
-        var btnRow = new StackPanel { Orientation = Orientation.Horizontal };
+        var btnRow = new WrapPanel();
         _launchBtn = MakeButton("启动外挂", Launch, true, PackIconKind.Terminal);
         btnRow.Children.Add(_launchBtn);
         _downloadBtn = MakeButton("下载插件", Download, false, PackIconKind.CloudDownload);
@@ -546,25 +532,10 @@ public class ElectermLauncherView : UserControl
         return panel;
     }
 
-    /// <summary>Tab2 外挂连接：说明卡片 + 协议填参行 + 外挂连接按钮</summary>
-    private StackPanel BuildConnectTab()
+    /// <summary>外挂连接字段区。</summary>
+    private StackPanel BuildConnectPanel()
     {
         var panel = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
-
-        // 说明卡片（样式与 KylinOS 运维策略的 MakeInfoCard 一致）
-        var cardRows = new StackPanel { Margin = new Thickness(12, 8, 12, 8) };
-        cardRows.Children.Add(new TextBlock { Text = "🔗 SSH/RDP/VNC 通过 electerm:// 唤起；SFTP 使用 --sftp-only，只显示 SFTP 面板，密码在 electerm 中手输（不经过本程序）", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
-        cardRows.Children.Add(new TextBlock { Text = "📌 协议切换自动填充默认端口（SSH/SFTP 22、RDP 3389、VNC 5900）；用户名可选", FontSize = 12, Margin = new Thickness(0, 1, 0, 1), TextWrapping = TextWrapping.Wrap });
-        panel.Children.Add(new Border
-        {
-            Background = new SolidColorBrush(Color.FromRgb(237, 242, 247)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(189, 206, 223)),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(4),
-            Margin = new Thickness(0, 0, 0, 8),
-            Child = cardRows
-        });
 
         var connRow1 = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
         connRow1.Children.Add(MakeLabel("协议:"));
@@ -592,22 +563,12 @@ public class ElectermLauncherView : UserControl
         connRow1.Children.Add(_userBox);
         panel.Children.Add(connRow1);
 
-        var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal };
+        var connBtnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
         connBtnRow.Children.Add(MakeButton("外挂连接", LaunchRemote, true, PackIconKind.OpenInApp));
         panel.Children.Add(connBtnRow);
 
         _protocolCombo.SelectedIndex = 0;  // 默认 SSH，触发端口联动
         return panel;
-    }
-
-    /// <summary>切换 Tab 并同步按钮高亮（当前 Tab 按钮用 Raised 样式）</summary>
-    private void SwitchTab(int index)
-    {
-        _tabControl.SelectedIndex = index;
-        var active = TryFindResource("MaterialDesignRaisedButton") as Style;
-        var inactive = TryFindResource("MaterialDesignOutlinedButton") as Style;
-        _tabManageBtn.Style = index == 0 ? active : inactive;
-        _tabConnectBtn.Style = index == 1 ? active : inactive;
     }
 
     private void SetStatus(string msg, bool success)
