@@ -26,16 +26,6 @@ if exist "%PUBLISH_DIR%\Npgsql.dll" del /q "%PUBLISH_DIR%\Npgsql.dll"
 if exist "%PUBLISH_DIR%\OpenGauss.NET.dll" del /q "%PUBLISH_DIR%\OpenGauss.NET.dll"
 
 echo 正在发布 ToolHelper...
-dotnet clean ToolHelper.csproj -c Release -v q --nologo
-if errorlevel 1 (
-    echo.
-    echo [错误] dotnet clean 失败！可能未安装 .NET 8 SDK。
-    echo 请运行 dotnet --version 验证，或访问 https://aka.ms/dotnet-download 安装。
-    echo.
-    pause
-    exit /b 1
-)
-
 dotnet publish ToolHelper.csproj -c Release -o "%PUBLISH_DIR%" --nologo
 if errorlevel 1 (
     echo.
